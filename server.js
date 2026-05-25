@@ -1216,6 +1216,7 @@ async function processAndMergeSources(req) {
     console.log('[PROCESS] Starting to process and merge all active sources.');
     sendProcessingStatus(req, 'Starting to process sources...', 'info');
     const settings = getSettings();
+    const activeUserAgent = settings.userAgents.find(ua => ua.id === settings.activeUserAgentId)?.value || 'VLC/3.0.20 (Linux; x86_64)';
 
     // --- NEW: Data holders for separated content ---
     let mergedLiveM3uContent = '#EXTM3U\n';
@@ -1501,13 +1502,26 @@ async function processAndMergeSources(req) {
             } else if (source.type === 'url') {
                 sendProcessingStatus(req, ` -> Fetching content from URL...`, 'info');
 
+                // XC providers can reject XMLTV/API requests from Node's default HTTPS client.
+                // Mirror the M3U XC fetch behavior by sending the configured IPTV User-Agent
+                // for managed Xtream EPG sources while preserving any explicit source options.
+                const epgFetchOptions = source.isXcEpg
+                    ? {
+                        ...(source.fetchOptions || {}),
+                        headers: {
+                            ...(source.fetchOptions?.headers || {}),
+                            'User-Agent': activeUserAgent
+                        }
+                    }
+                    : (source.fetchOptions || {});
+
                 // Use a different function to fetch raw buffer for compressed files
                 if (source.path.endsWith('.gz')) {
-                    const buffer = await fetchUrlContent(source.path, source.fetchOptions || {}, true); // Fetch as buffer
+                    const buffer = await fetchUrlContent(source.path, epgFetchOptions, true); // Fetch as buffer
                     xmlString = zlib.gunzipSync(buffer).toString('utf-8');
                     sendProcessingStatus(req, ` -> Successfully fetched and decompressed EPG content.`, 'info');
                 } else {
-                    xmlString = await fetchUrlContent(source.path, source.fetchOptions || {});
+                    xmlString = await fetchUrlContent(source.path, epgFetchOptions);
                     sendProcessingStatus(req, ` -> Successfully fetched EPG content.`, 'info');
                 }
 
