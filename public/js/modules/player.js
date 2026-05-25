@@ -341,10 +341,6 @@ function findVodLibraryItem(url) {
     return guideState.vodMovies.find(m => m.url === url) || guideState.vodSeries.find(s => s.url === url);
 }
 
-function shouldUseNativeVodPlayback(profile, useDirectPlay) {
-    return useDirectPlay || profile.command === 'redirect' || profile.command.includes('-f mp4');
-}
-
 function findProfileById(settings, profileId) {
     const allProfiles = [
         ...(settings.streamProfiles || []),
@@ -430,69 +426,9 @@ async function playVodWithNativeVideo(streamUrlToPlay, title, logo, originalUrl,
     }
 }
 
-async function playVodWithMpegts(streamUrlToPlay, title, logo) {
-    console.log(`[VOD_PLAYER] Using mpegts.js MPEG-TS playback for: "${title}"`);
-
-    if (!mpegts.isSupported()) {
-        const errorMsg = 'Your browser does not support Media Source Extensions (MSE), required for MPEG-TS profile playback.';
-        showNotification(errorMsg, true);
-        logToPlayerConsole(errorMsg, true);
-        console.error('[VOD_PLAYER] MSE not supported.');
-        return;
-    }
-
-    const mpegtsConfig = {
-        enableStashBuffer: true,
-        stashInitialSize: 4096,
-        isLive: false,
-    };
-    logToPlayerConsole(`mpegts.js VOD config: enableStashBuffer=${mpegtsConfig.enableStashBuffer}, stashInitialSize=${mpegtsConfig.stashInitialSize}KB, isLive=false`);
-
-    try {
-        appState.player = mpegts.createPlayer({
-            type: 'mpegts',
-            isLive: false,
-            url: streamUrlToPlay
-        }, mpegtsConfig);
-
-        appState.player.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
-            const errorMsg = `Player Error: ${errorType} - ${errorDetail}`;
-            console.error(`[VOD_PLAYER] MPEGTS Player Error: ${errorMsg}`);
-            logToPlayerConsole(errorMsg, true);
-            showNotification(errorMsg, true);
-            stopAndCleanupPlayer();
-        });
-
-        appState.player.on(mpegts.Events.MEDIA_INFO, () => {
-            console.log('[VOD_PLAYER] Media info received, playback starting.');
-            logToPlayerConsole('Playback started.');
-        });
-
-        openModal(UIElements.videoModal);
-        UIElements.videoTitle.textContent = title;
-        appState.player.attachMediaElement(UIElements.videoElement);
-        appState.player.load();
-
-        UIElements.videoElement.volume = parseFloat(localStorage.getItem('iptvPlayerVolume') || 0.5);
-
-        await appState.player.play();
-        console.log(`[VOD_PLAYER] Playback command issued for: "${title}"`);
-        setLocalPlayerState(streamUrlToPlay, title, logo);
-
-        if (streamInfoInterval) clearInterval(streamInfoInterval);
-        streamInfoInterval = setInterval(updateStreamInfo, 2000);
-    } catch (err) {
-        const errorMsg = `Failed to initialize mpegts.js player: ${err.message}`;
-        console.error('[VOD_PLAYER] Error initializing mpegts.js player:', err);
-        logToPlayerConsole(errorMsg, true);
-        showNotification(errorMsg, true);
-        await stopAndCleanupPlayer();
-    }
-}
-
 /**
  * Plays a VOD (Movie or Episode) using native HTML5 video for direct/MP4 sources
- * or mpegts.js only when the selected profile emits MPEG-TS.
+ * and server-remapped MP4/fMP4 transcodes.
  * @param {string} url - The direct URL to the VOD file (e.g., .mp4, .mkv).
  * @param {string} title - The title of the VOD to display.
  */

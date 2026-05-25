@@ -12,7 +12,7 @@ import { navigateToProgramInGuide } from './notification.js';
 // MODIFIED: Import channel selector populator from multiview
 import { populateChannelSelector } from './multiview.js';
 import { ICONS } from './icons.js'; // MODIFIED: Import the new icon library
-import { stopAndCleanupPlayer } from './player.js?v=5'; // **NEW: Import main player cleanup function**
+import { stopAndCleanupPlayer } from './player.js?v=6'; // **NEW: Import main player cleanup function**
 
 /**
  * Initializes the DVR page by fetching all required data from the backend.

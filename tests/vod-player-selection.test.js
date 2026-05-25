@@ -10,13 +10,15 @@ assert(
 );
 
 assert(
-  playerJs.includes('function playVodWithMpegts'),
-  'VOD playback should keep a separate mpegts.js path for MPEG-TS profile output'
+  !playerJs.includes('function playVodWithMpegts') &&
+  !playerJs.includes('Failed to initialize mpegts.js player'),
+  'Browser VOD code should not retain a mpegts.js playback path or mpegts.js initialization error string; seeing that exact error means stale frontend code is loaded'
 );
 
 assert(
-  playerJs.includes("profile.command === 'redirect'") && playerJs.includes('profile.command.includes(\'-f mp4\')'),
-  'VOD playback should choose native video for redirect URLs and FFmpeg profiles that output MP4/fMP4'
+  playerJs.includes("const directProfile = { id: 'direct', name: 'Direct Play', command: 'redirect' }") &&
+  playerJs.includes('await playVodWithNativeVideo(streamUrlToPlay, title, logo, url, profile);'),
+  'VOD playback should route redirect and MP4/fMP4 /stream URLs through native HTML5 video'
 );
 
 assert(
@@ -31,11 +33,6 @@ assert(
   playerJs.includes('const profileIdForStream = profile.id;') &&
   playerJs.includes('profileId=${profileIdForStream}'),
   'VOD /stream URLs should use the auto-selected VOD-safe profile id, not always the active live stream profile id'
-);
-
-assert(
-  playerJs.includes("type: 'mpegts'") && playerJs.includes('isLive: false'),
-  'mpegts.js VOD playback should use MPEG-TS media source type and non-live buffering semantics'
 );
 
 const vodFunctionStart = playerJs.indexOf('export const playVOD');
