@@ -48,4 +48,9 @@ assert(
   'playVOD should not unconditionally initialize mpegts.js with type mse for all VOD sources'
 );
 
+assert(
+  !playVodBody.includes('playVodWithMpegts('),
+  'playVOD should not route browser VOD playback through mpegts.js; the backend remaps stale MPEG-TS profile requests to MP4/fMP4, so the frontend should use native video for VOD streams'
+);
+
 console.log('vod-player-selection regression checks passed');

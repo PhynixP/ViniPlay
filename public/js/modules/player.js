@@ -536,11 +536,10 @@ export const playVOD = async (url, title, logo = '') => {
         currentProfileId = profileIdForStream;
     }
 
-    if (shouldUseNativeVodPlayback(profile, useDirectPlay)) {
-        await playVodWithNativeVideo(streamUrlToPlay, title, logo, url, profile);
-    } else {
-        await playVodWithMpegts(streamUrlToPlay, title, logo);
-    }
+    // Always use native HTML5 video for browser VOD playback. The server-side /stream
+    // guard remaps stale MPEG-TS live profile requests to MP4/fMP4 output, so routing
+    // VOD through mpegts.js can mis-handle the MP4 response and race with cleanup.
+    await playVodWithNativeVideo(streamUrlToPlay, title, logo, url, profile);
 };
 
 /**
