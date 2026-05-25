@@ -20,7 +20,7 @@ for (const file of files) {
 
 const mainHtml = fs.readFileSync(path.join(__dirname, '..', 'public/index.html'), 'utf8');
 assert(
-  mainHtml.includes('/js/main.js?v=6'),
+  mainHtml.includes('/js/main.js?v=7'),
   'index.html should bump the main module query when VOD player-selection code changes'
 );
 

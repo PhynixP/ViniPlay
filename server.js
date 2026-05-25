@@ -3435,7 +3435,7 @@ function selectVodSafeProfileForStream(settings, requestedProfile, streamUrl = '
 
 // MODIFIED: Stream endpoint now allows local network access for Chromecast
 app.get('/stream', allowLocalOrAuth, async (req, res) => {
-    const { url: streamUrl, profileId, userAgentId, vodName, vodLogo } = req.query;
+    const { url: streamUrl, profileId, userAgentId, vodName, vodLogo, vodClient } = req.query;
     const userId = req.session.userId;
     const username = req.session.username;
     const clientIp = req.clientIp;
@@ -3454,8 +3454,11 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
 
     const requestedProfile = profile;
     const isVodRequest = Boolean(vodName || isMovieOrSeriesUrl(streamUrl));
-    if (isVodRequest) {
+    const isNativeVodClient = vodClient === 'native';
+    if (isVodRequest && isNativeVodClient) {
         profile = selectVodSafeProfileForStream(settings, requestedProfile, streamUrl);
+    } else if (isVodRequest && !isMp4OutputProfile(requestedProfile)) {
+        console.warn(`[STREAM] Stale mpegts.js VOD client detected for ${streamUrl}; using requested MPEG-TS profile '${requestedProfile.name}' (${requestedProfile.id}) instead of MP4/fMP4 remap.`);
     }
     const effectiveProfileId = profile.id;
     res.setHeader('X-ViniPlay-Effective-Profile', effectiveProfileId);

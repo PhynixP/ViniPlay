@@ -462,7 +462,7 @@ export const playVOD = async (url, title, logo = '') => {
     const profileIdForStream = profile.id;
     const streamUrlToPlay = profile.command === 'redirect'
         ? url
-        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileIdForStream}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}`;
+        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileIdForStream}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}&vodClient=native`;
 
     console.log(`[VOD_PLAYER] Final VOD stream URL: ${streamUrlToPlay}`);
     logToPlayerConsole(`Final VOD stream URL: ${streamUrlToPlay}`);

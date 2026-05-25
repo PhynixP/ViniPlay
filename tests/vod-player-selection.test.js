@@ -31,8 +31,9 @@ assert(
 
 assert(
   playerJs.includes('const profileIdForStream = profile.id;') &&
-  playerJs.includes('profileId=${profileIdForStream}'),
-  'VOD /stream URLs should use the auto-selected VOD-safe profile id, not always the active live stream profile id'
+  playerJs.includes('profileId=${profileIdForStream}') &&
+  playerJs.includes('vodClient=native'),
+  'VOD /stream URLs should use the auto-selected VOD-safe profile id and identify native HTML5 video clients, not always the active live stream profile id'
 );
 
 const vodFunctionStart = playerJs.indexOf('export const playVOD');

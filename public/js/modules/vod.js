@@ -8,7 +8,7 @@ import { appState, UIElements, guideState } from './state.js'; // Keep guideStat
 import { openModal, closeModal, showNotification } from './ui.js';
 import { ICONS } from './icons.js';
 import { saveUserSetting, fetchVodLibrary, fetchSeriesDetails } from './api.js';
-import { playVOD } from './player.js?v=6';
+import { playVOD } from './player.js?v=7';
 
 // Local state for VOD page
 const vodState = {

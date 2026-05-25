@@ -15,8 +15,18 @@ assert(
 );
 
 assert(
+  serverJs.includes('vodClient') && serverJs.includes("vodClient === 'native'"),
+  'native browser VOD requests should identify themselves so the backend can distinguish current native-video clients from stale mpegts.js clients'
+);
+
+assert(
   serverJs.includes('[STREAM] VOD profile remap') && serverJs.includes('effectiveProfileId'),
-  'backend guard should remap MPEG-TS VOD requests to an effective MP4/fMP4 profile and log the remap'
+  'backend guard should remap current native-video MPEG-TS VOD requests to an effective MP4/fMP4 profile and log the remap'
+);
+
+assert(
+  serverJs.includes('Stale mpegts.js VOD client detected') && serverJs.includes('using requested MPEG-TS profile'),
+  'backend should keep MPEG-TS output for stale VOD clients that still initialize mpegts.js so they do not receive MP4/fMP4 in a TS player'
 );
 
 const streamRouteStart = serverJs.indexOf("app.get('/stream'");
