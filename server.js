@@ -3381,6 +3381,58 @@ function logFFmpegStderr(streamKey, data) {
     });
 }
 
+function isMovieOrSeriesUrl(streamUrl = '') {
+    return /\/movie\/|\/series\//i.test(streamUrl);
+}
+
+function isMp4OutputProfile(profile) {
+    return Boolean(profile && profile.command && profile.command.includes('-f mp4'));
+}
+
+function findProfileById(settings, profileId) {
+    return (settings.streamProfiles || []).find(p => p.id === profileId)
+        || (settings.castProfiles || []).find(p => p.id === profileId);
+}
+
+function selectVodSafeProfileForStream(settings, requestedProfile, streamUrl = '') {
+    if (!requestedProfile || requestedProfile.command === 'redirect' || isMp4OutputProfile(requestedProfile)) {
+        return requestedProfile;
+    }
+
+    const requestedId = requestedProfile.id || '';
+    const requestedName = requestedProfile.name || '';
+    const requestedCommand = requestedProfile.command || '';
+    const requestedFingerprint = `${requestedId} ${requestedName} ${requestedCommand}`.toLowerCase();
+    const candidateIds = [];
+
+    if (requestedFingerprint.includes('nvidia') || requestedFingerprint.includes('nvenc')) {
+        candidateIds.push('cast-nvidia', 'ffmpeg-fmp4-nvidia');
+    }
+    if (requestedFingerprint.includes('intel') || requestedFingerprint.includes('qsv')) {
+        candidateIds.push('cast-intel');
+    }
+    if (requestedFingerprint.includes('amd') || requestedFingerprint.includes('radeon')) {
+        candidateIds.push('cast-vaapi-amd');
+    }
+    if (requestedFingerprint.includes('vaapi')) {
+        candidateIds.push('cast-vaapi');
+    }
+
+    // Universal browser-safe fallbacks for VOD, ordered from transcode profile to Cast profile.
+    candidateIds.push('ffmpeg-fmp4', 'cast-default');
+
+    for (const candidateId of candidateIds) {
+        const candidate = findProfileById(settings, candidateId);
+        if (isMp4OutputProfile(candidate)) {
+            console.log(`[STREAM] VOD profile remap: requested '${requestedProfile.name}' (${requestedProfile.id}) for ${streamUrl}; using '${candidate.name}' (${candidate.id}) with MP4/fMP4 output.`);
+            return candidate;
+        }
+    }
+
+    console.warn(`[STREAM] VOD profile remap unavailable: requested '${requestedProfile.name}' (${requestedProfile.id}) emits non-MP4 output, but no MP4/fMP4 profile was found.`);
+    return requestedProfile;
+}
+
 // MODIFIED: Stream endpoint now allows local network access for Chromecast
 app.get('/stream', allowLocalOrAuth, async (req, res) => {
     const { url: streamUrl, profileId, userAgentId, vodName, vodLogo } = req.query;
@@ -3388,8 +3440,29 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
     const username = req.session.username;
     const clientIp = req.clientIp;
 
-    // Include profileId in stream key so Cast (MP4) and browser (MPEG-TS) don't share the same process
-    const streamKey = `${userId}::${streamUrl}::${profileId}`;
+    console.log(`[STREAM] New request: URL=${streamUrl}, ProfileID=${profileId}, UserAgentID=${userAgentId}`);
+    if (!streamUrl) return res.status(400).send('Error: `url` query parameter is required.');
+
+    let settings = getSettings();
+    // Check both streamProfiles and castProfiles arrays
+    let profile = findProfileById(settings, profileId);
+
+    if (!profile) {
+        console.error(`[STREAM] Stream profile with ID "${profileId}" not found in settings.`);
+        return res.status(404).send(`Error: Stream profile with ID "${profileId}" not found.`);
+    }
+
+    const requestedProfile = profile;
+    const isVodRequest = Boolean(vodName || isMovieOrSeriesUrl(streamUrl));
+    if (isVodRequest) {
+        profile = selectVodSafeProfileForStream(settings, requestedProfile, streamUrl);
+    }
+    const effectiveProfileId = profile.id;
+    res.setHeader('X-ViniPlay-Effective-Profile', effectiveProfileId);
+    res.setHeader('X-ViniPlay-VOD-Profile-Remapped', String(isVodRequest && requestedProfile.id !== effectiveProfileId));
+
+    // Include effectiveProfileId in stream key so Cast (MP4), browser (MPEG-TS), and VOD remaps don't share the same process
+    const streamKey = `${userId}::${streamUrl}::${effectiveProfileId}`;
 
     const activeStreamInfo = activeStreamProcesses.get(streamKey);
 
@@ -3408,21 +3481,6 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
             }
         });
         return;
-    }
-
-    console.log(`[STREAM] New request: URL=${streamUrl}, ProfileID=${profileId}, UserAgentID=${userAgentId}`);
-    if (!streamUrl) return res.status(400).send('Error: `url` query parameter is required.');
-
-    let settings = getSettings();
-    // Check both streamProfiles and castProfiles arrays
-    let profile = (settings.streamProfiles || []).find(p => p.id === profileId);
-    if (!profile) {
-        profile = (settings.castProfiles || []).find(p => p.id === profileId);
-    }
-
-    if (!profile) {
-        console.error(`[STREAM] Stream profile with ID "${profileId}" not found in settings.`);
-        return res.status(404).send(`Error: Stream profile with ID "${profileId}" not found.`);
     }
 
     // NEW: Determine if this is a transcoding or direct stream
@@ -3640,9 +3698,19 @@ app.post('/api/stream/stop', requireAuth, (req, res) => {
         return res.status(400).json({ error: "Stream URL is required to stop the stream." });
     }
 
-    // If profileId is provided, construct the specific key
+    // If profileId is provided, construct the specific key first, then fall back to any remapped key for the same URL.
     if (profileId) {
         streamKey = `${req.session.userId}::${streamUrl}::${profileId}`;
+        if (!activeStreamProcesses.has(streamKey)) {
+            const partialKey = `${req.session.userId}::${streamUrl}`;
+            for (const key of activeStreamProcesses.keys()) {
+                if (key.startsWith(partialKey + '::')) {
+                    console.log(`[STREAM_STOP_API] Exact key ${streamKey} not found; using active remapped key ${key}`);
+                    streamKey = key;
+                    break;
+                }
+            }
+        }
     } else {
         // If no profileId, try to find a matching key for this user and URL
         // The key format is either "userId::url" (old) or "userId::url::profileId" (new)
