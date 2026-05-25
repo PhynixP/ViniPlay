@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node tests/xc-epg-user-agent.test.js"
+    "test": "node tests/xc-epg-user-agent.test.js && node tests/qsv-profile-commands.test.js"
   },
   "author": "Andrea Ardovini",
   "license": "CC BY-NC-SA 4.0",
