@@ -345,6 +345,50 @@ function shouldUseNativeVodPlayback(profile, useDirectPlay) {
     return useDirectPlay || profile.command === 'redirect' || profile.command.includes('-f mp4');
 }
 
+function findProfileById(settings, profileId) {
+    const allProfiles = [
+        ...(settings.streamProfiles || []),
+        ...(settings.castProfiles || []),
+    ];
+    return allProfiles.find(p => p.id === profileId);
+}
+
+function selectVodTranscodeProfile(settings, activeProfile) {
+    if (!activeProfile || activeProfile.command === 'redirect' || activeProfile.command.includes('-f mp4')) {
+        return activeProfile;
+    }
+
+    const candidateIds = [];
+    const activeId = activeProfile.id || '';
+
+    if (activeId.includes('nvidia') || settings.hasNvidiaGpu || guideState.hardware?.nvidia) {
+        candidateIds.push('cast-nvidia', 'ffmpeg-fmp4-nvidia');
+    }
+    if (activeId.includes('intel') || activeId.includes('qsv') || guideState.hardware?.intel_qsv) {
+        candidateIds.push('cast-intel');
+    }
+    if (activeId.includes('vaapi-amd') || activeId.includes('radeon') || guideState.hardware?.radeon_vaapi) {
+        candidateIds.push('cast-vaapi-amd');
+    }
+    if (activeId.includes('vaapi') || guideState.hardware?.intel_vaapi) {
+        candidateIds.push('cast-vaapi');
+    }
+
+    // CPU fMP4 is the universal VOD-safe fallback and exists in default settings.
+    candidateIds.push('ffmpeg-fmp4', 'cast-default');
+
+    for (const candidateId of candidateIds) {
+        const candidate = findProfileById(settings, candidateId);
+        if (candidate && candidate.command && candidate.command.includes('-f mp4')) {
+            console.log(`[VOD_PLAYER] Auto-selected VOD-safe fMP4 profile "${candidate.name}" instead of live profile "${activeProfile.name}".`);
+            return candidate;
+        }
+    }
+
+    console.warn(`[VOD_PLAYER] No MP4/fMP4 VOD profile found. Falling back to active profile "${activeProfile.name}".`);
+    return activeProfile;
+}
+
 async function playVodWithNativeVideo(streamUrlToPlay, title, logo, originalUrl, profile) {
     console.log(`[VOD_PLAYER] Using native HTML5 video playback for: "${title}"`);
     logToPlayerConsole('Using native HTML5 video playback for VOD.');
@@ -462,11 +506,14 @@ export const playVOD = async (url, title, logo = '') => {
     const profileId = settings.activeStreamProfileId;
     const userAgentId = settings.activeUserAgentId;
     const directProfile = { id: 'direct', name: 'Direct Play', command: 'redirect' };
+    const activeProfile = useDirectPlay
+        ? directProfile
+        : findProfileById(settings, profileId);
     const profile = useDirectPlay
         ? directProfile
-        : (settings.streamProfiles || []).find(p => p.id === profileId);
+        : selectVodTranscodeProfile(settings, activeProfile);
 
-    if (!useDirectPlay && (!profileId || !userAgentId || !profile)) {
+    if (!useDirectPlay && (!profileId || !userAgentId || !activeProfile || !profile)) {
         const errorMsg = 'Active stream profile or user agent not set/found. Cannot play VOD via profile. Please check settings.';
         showNotification(errorMsg, true);
         logToPlayerConsole(errorMsg, true);
@@ -476,16 +523,17 @@ export const playVOD = async (url, title, logo = '') => {
 
     logToPlayerConsole(`Using VOD playback profile: ${profile.name}`);
 
+    const profileIdForStream = profile.id;
     const streamUrlToPlay = profile.command === 'redirect'
         ? url
-        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileId}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}`;
+        : `/stream?url=${encodeURIComponent(url)}&profileId=${profileIdForStream}&userAgentId=${userAgentId}&vodName=${encodeURIComponent(title)}&vodLogo=${encodeURIComponent(logo)}`;
 
     console.log(`[VOD_PLAYER] Final VOD stream URL: ${streamUrlToPlay}`);
     logToPlayerConsole(`Final VOD stream URL: ${streamUrlToPlay}`);
 
     if (profile.command !== 'redirect') {
         currentLocalStreamUrl = url;
-        currentProfileId = profileId;
+        currentProfileId = profileIdForStream;
     }
 
     if (shouldUseNativeVodPlayback(profile, useDirectPlay)) {

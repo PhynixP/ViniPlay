@@ -20,6 +20,20 @@ assert(
 );
 
 assert(
+  playerJs.includes('function selectVodTranscodeProfile') &&
+  playerJs.includes('settings.castProfiles || []') &&
+  playerJs.includes("'cast-intel'") &&
+  playerJs.includes("'ffmpeg-fmp4'"),
+  'VOD profile playback should auto-select an MP4/fMP4-capable profile, including cast Intel/QSV or CPU fallback, instead of reusing live MPEG-TS profiles'
+);
+
+assert(
+  playerJs.includes('const profileIdForStream = profile.id;') &&
+  playerJs.includes('profileId=${profileIdForStream}'),
+  'VOD /stream URLs should use the auto-selected VOD-safe profile id, not always the active live stream profile id'
+);
+
+assert(
   playerJs.includes("type: 'mpegts'") && playerJs.includes('isLive: false'),
   'mpegts.js VOD playback should use MPEG-TS media source type and non-live buffering semantics'
 );
