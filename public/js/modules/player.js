@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=18';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=19';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -629,19 +629,18 @@ export function setupPlayerEventListeners() {
             try {
                 recoverCastSdkFromGlobals();
 
-                const castReportsNoDevices = castState.castAvailability === 'NO_DEVICES_AVAILABLE';
-                if (castReportsNoDevices) {
-                    console.warn('[PLAYER] Chrome Cast availability reports no devices, but still calling requestSession because Chrome’s native Cast picker may have fresher discovery state.', {
-                        castAvailability: castState.castAvailability,
-                        origin: window.location.origin,
-                        hostname: window.location.hostname,
-                        isSecureContext: window.isSecureContext,
-                        castState
-                    });
-                }
-
                 if (castState.isAvailable && castState.isInitialized && window.cast?.framework) {
                     const sessionRequest = cast.framework.CastContext.getInstance().requestSession();
+                    const castReportsNoDevices = castState.castAvailability === 'NO_DEVICES_AVAILABLE';
+                    if (castReportsNoDevices) {
+                        console.warn('[PLAYER] Chrome Cast availability reports no devices, but still calling requestSession because Chrome’s native Cast picker may have fresher discovery state.', {
+                            castAvailability: castState.castAvailability,
+                            origin: window.location.origin,
+                            hostname: window.location.hostname,
+                            isSecureContext: window.isSecureContext,
+                            castState
+                        });
+                    }
                     sessionRequest.catch((error) => {
                         console.error('Error requesting cast session:', error, {
                             origin: window.location.origin,

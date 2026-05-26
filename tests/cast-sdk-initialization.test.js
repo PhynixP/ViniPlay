@@ -46,12 +46,12 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=18'),
+  mainJs.includes('./modules/player.js?v=19'),
   'main.js must deep-cache-bust player.js after Cast availability handling changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=18'),
+  playerJs.includes('./cast.js?v=19'),
   'player.js must deep-cache-bust cast.js after Cast availability handling changes'
 );
 
@@ -71,12 +71,19 @@ assert(
   'player.js should request the Cast session directly from the visible button click handler'
 );
 
+const requestSessionIndex = indexOfOrFail(playerJs, 'CastContext.getInstance().requestSession()', 'player.js should request a Cast session from the visible button');
+const noDevicesDiagnosticIndex = indexOfOrFail(playerJs, "castReportsNoDevices", 'player.js should retain NO_DEVICES_AVAILABLE diagnostics');
 assert(
   castJs.includes('CAST_STATE_CHANGED') &&
   castJs.includes('castAvailability') &&
   playerJs.includes('but still calling requestSession') &&
   !playerJs.includes('Chrome is not detecting any Cast devices'),
   'Cast diagnostics may record NO_DEVICES_AVAILABLE, but the visible Cast button must still call requestSession because Chrome native Cast discovery can see devices while the Web Sender availability event reports NO_DEVICES_AVAILABLE'
+);
+
+assert(
+  requestSessionIndex < noDevicesDiagnosticIndex,
+  'requestSession() should happen before NO_DEVICES_AVAILABLE logging so nothing between the user click and Cast picker launch can interfere with Chrome transient activation'
 );
 
 assert(
