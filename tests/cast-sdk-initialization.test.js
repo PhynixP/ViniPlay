@@ -46,13 +46,24 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=11'),
-  'main.js must deep-cache-bust player.js after Cast session diagnostics changes'
+  mainJs.includes('./modules/player.js?v=12'),
+  'main.js must deep-cache-bust player.js after Cast launcher changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=11'),
-  'player.js must deep-cache-bust cast.js after Cast session diagnostics changes'
+  playerJs.includes('./cast.js?v=12'),
+  'player.js must deep-cache-bust cast.js after Cast launcher changes'
+);
+
+assert(
+  indexHtml.includes('<google-cast-launcher id="cast-btn"'),
+  'index.html should use the official google-cast-launcher element so Chrome owns the Cast picker user activation path'
+);
+
+assert(
+  playerJs.includes("UIElements.castBtn.tagName === 'GOOGLE-CAST-LAUNCHER'") &&
+  playerJs.includes('Using native google-cast-launcher element for Cast session requests'),
+  'player.js should not call requestSession manually when the official google-cast-launcher element is present'
 );
 
 assert(

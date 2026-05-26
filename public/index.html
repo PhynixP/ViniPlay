@@ -687,8 +687,24 @@
             -webkit-appearance: none;
         }
 
-        #cast-btn svg path {
+        #cast-btn svg path,
+        google-cast-launcher#cast-btn {
             transition: all 0.2s ease-in-out;
+        }
+
+        google-cast-launcher#cast-btn {
+            --connected-color: #3b82f6;
+            --disconnected-color: #9ca3af;
+            width: 2.25rem;
+            height: 2.25rem;
+            padding: 0.5rem;
+            cursor: pointer;
+            border-radius: 0.375rem;
+        }
+
+        google-cast-launcher#cast-btn:hover {
+            --disconnected-color: #ffffff;
+            background-color: #374151;
         }
 
         #cast-btn.cast-connected {
@@ -2345,10 +2361,8 @@
                         class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Refresh Stream">
                         <span data-icon="refresh"></span>
                     </button>
-                    <button id="cast-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
-                        title="Cast to device">
-                        <span data-icon="cast"></span>
-                    </button>
+                    <google-cast-launcher id="cast-btn" class="text-gray-400 hover:text-white rounded-md hover:bg-gray-700"
+                        title="Cast to device" aria-label="Cast to device"></google-cast-launcher>
                     <button id="pip-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
                         title="Picture-in-Picture">
                         <span data-icon="pip"></span>
@@ -2964,7 +2978,7 @@
     </div>
 
 
-    <script type="module" src="/js/main.js?v=11"></script>
+    <script type="module" src="/js/main.js?v=12"></script>
 
     <div id="processing-status-modal"
         class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4">

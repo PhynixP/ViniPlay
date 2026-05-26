@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=11';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=12';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -624,6 +624,9 @@ export function setupPlayerEventListeners() {
     }
 
     if (UIElements.castBtn) {
+        if (UIElements.castBtn.tagName === 'GOOGLE-CAST-LAUNCHER') {
+            console.log('[PLAYER] Using native google-cast-launcher element for Cast session requests.');
+        } else {
         UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Custom cast button clicked. Requesting session...');
             try {
@@ -678,6 +681,7 @@ export function setupPlayerEventListeners() {
                 showNotification('Cast functionality is not available. Please try reloading.', true);
             }
         });
+        }
     } else {
         console.error('[PLAYER] CRITICAL: Cast button #cast-btn NOT FOUND.');
     }
