@@ -8,6 +8,8 @@ import { UIElements, guideState, appState } from './state.js';
 import { stopStream } from './api.js';
 
 const APPLICATION_ID = 'CC1AD845'; // Default Media Receiver App ID
+const CAST_INITIALIZATION_RETRY_DELAY_MS = 250;
+const CAST_INITIALIZATION_MAX_ATTEMPTS = 20;
 
 export const castState = {
     isAvailable: false,
@@ -19,6 +21,7 @@ export const castState = {
     currentCastStreamUrl: null, // Track the current Cast stream URL for cleanup
     isInitialized: false,
     initializationError: null,
+    initializationAttempts: 0,
     localPlayerState: {
         streamUrl: null,
         name: null,
@@ -78,9 +81,20 @@ function initializeCastApi() {
         return;
     }
 
+    castState.initializationAttempts += 1;
     if (!window.cast?.framework || !window.chrome?.cast) {
-        castState.initializationError = 'Cast framework globals are not available yet.';
-        console.warn('[CAST] Cannot initialize Cast context:', castState.initializationError);
+        if (castState.initializationAttempts < CAST_INITIALIZATION_MAX_ATTEMPTS) {
+            castState.initializationError = 'Cast framework globals are not available yet; retrying.';
+            console.warn('[CAST] Cannot initialize Cast context yet:', castState.initializationError, {
+                attempt: castState.initializationAttempts,
+                maxAttempts: CAST_INITIALIZATION_MAX_ATTEMPTS
+            });
+            setTimeout(initializeCastApi, CAST_INITIALIZATION_RETRY_DELAY_MS);
+            return;
+        }
+
+        castState.initializationError = 'Cast SDK loaded, but Cast framework globals did not become available.';
+        console.error('[CAST] Cannot initialize Cast context:', castState.initializationError);
         return;
     }
 
@@ -104,6 +118,7 @@ function initializeCastApi() {
     );
     castState.isInitialized = true;
     castState.initializationError = null;
+    castState.initializationAttempts = 0;
 }
 
 function handleCastSdkAvailability(isAvailable, error) {
@@ -115,6 +130,7 @@ function handleCastSdkAvailability(isAvailable, error) {
         castState.isAvailable = false;
         castState.isInitialized = false;
         castState.initializationError = error || 'Cast SDK reported unavailable';
+        castState.initializationAttempts = 0;
         // Optionally hide the cast button if the SDK is not available at all
         if (UIElements.castBtn) {
             UIElements.castBtn.style.display = 'none';

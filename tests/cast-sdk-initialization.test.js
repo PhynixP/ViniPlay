@@ -36,13 +36,23 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=8'),
-  'main.js must deep-cache-bust player.js after Cast click handling changes'
+  castJs.includes('CAST_INITIALIZATION_RETRY_DELAY_MS') && castJs.includes('setTimeout') && castJs.includes('castState.initializationAttempts'),
+  'cast.js should retry CastContext initialization when the SDK callback fires before Cast framework globals are ready'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=8'),
-  'player.js must deep-cache-bust cast.js after Cast initialization changes'
+  castJs.includes('CAST_INITIALIZATION_MAX_ATTEMPTS') && castJs.includes('Cast SDK loaded, but Cast framework globals did not become available'),
+  'cast.js should eventually expose a diagnostic error instead of leaving Cast permanently "still initializing"'
+);
+
+assert(
+  mainJs.includes('./modules/player.js?v=9'),
+  'main.js must deep-cache-bust player.js after Cast initialization retry changes'
+);
+
+assert(
+  playerJs.includes('./cast.js?v=9'),
+  'player.js must deep-cache-bust cast.js after Cast initialization retry changes'
 );
 
 assert(
