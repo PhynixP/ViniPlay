@@ -39,6 +39,7 @@ export const castState = {
     isInitialized: false,
     initializationError: null,
     initializationAttempts: 0,
+    castAvailability: 'UNKNOWN',
     localPlayerState: {
         streamUrl: null,
         name: null,
@@ -123,6 +124,14 @@ function initializeCastApi() {
             autoJoinPolicy: chrome.cast.AutoJoinPolicy.TAB_AND_ORIGIN_SCOPED
         });
 
+        castState.castAvailability = castContext.getCastState?.() || 'UNKNOWN';
+        console.log('[CAST] Initial Cast availability state:', castState.castAvailability);
+
+        castContext.addEventListener(
+            cast.framework.CastContextEventType.CAST_STATE_CHANGED,
+            handleCastStateChange
+        );
+
         castContext.addEventListener(
             cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
             handleSessionStateChange
@@ -141,6 +150,15 @@ function initializeCastApi() {
         castState.initializationError = `CastContext initialization failed: ${error?.message || error}`;
         console.error('[CAST] Cannot initialize Cast context:', castState.initializationError, error);
     }
+}
+
+function handleCastStateChange(event) {
+    castState.castAvailability = event.castState;
+    console.log('[CAST] Cast availability state changed:', event.castState, {
+        origin: window.location.origin,
+        hostname: window.location.hostname,
+        isSecureContext: window.isSecureContext
+    });
 }
 
 function handleCastSdkAvailability(isAvailable, error) {
@@ -176,7 +194,13 @@ if (window.__viniplayCastSdkResolved) {
  * @param {chrome.cast.SessionStateEventData} event - The session state event.
  */
 function handleSessionStateChange(event) {
-    console.log(`[CAST] Session state changed: ${event.sessionState}`);
+    console.log(`[CAST] Session state changed: ${event.sessionState}`, {
+        errorCode: event.errorCode || null,
+        castAvailability: castState.castAvailability,
+        origin: window.location.origin,
+        hostname: window.location.hostname,
+        isSecureContext: window.isSecureContext
+    });
     const castContext = cast.framework.CastContext.getInstance();
     castState.session = castContext.getCurrentSession(); // Update session reference
 

@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=14';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=15';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -627,6 +627,18 @@ export function setupPlayerEventListeners() {
         UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Visible cast button clicked. Requesting session synchronously...');
             try {
+                if (castState.castAvailability === 'NO_DEVICES_AVAILABLE') {
+                    console.warn('[PLAYER] Cast clicked, but Chrome reports no Cast devices are available.', {
+                        castAvailability: castState.castAvailability,
+                        origin: window.location.origin,
+                        hostname: window.location.hostname,
+                        isSecureContext: window.isSecureContext,
+                        castState
+                    });
+                    showNotification('Chrome is not detecting any Cast devices. Check that this browser and the Chromecast are on the same LAN/Wi‑Fi, not isolated by VPN/guest Wi‑Fi/VLAN, and that Chrome’s built-in Cast menu can see the device.', true, 12000);
+                    return;
+                }
+
                 if (castState.isAvailable && castState.isInitialized && window.cast?.framework) {
                     const sessionRequest = cast.framework.CastContext.getInstance().requestSession();
                     sessionRequest.catch((error) => {

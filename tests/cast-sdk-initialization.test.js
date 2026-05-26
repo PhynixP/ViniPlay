@@ -46,12 +46,12 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=14'),
+  mainJs.includes('./modules/player.js?v=15'),
   'main.js must deep-cache-bust player.js after Cast launcher changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=14'),
+  playerJs.includes('./cast.js?v=15'),
   'player.js must deep-cache-bust cast.js after Cast launcher changes'
 );
 
@@ -69,6 +69,13 @@ assert(
   playerJs.includes('Visible cast button clicked. Requesting session synchronously') &&
   playerJs.includes('CastContext.getInstance().requestSession()'),
   'player.js should request the Cast session directly from the visible button click handler'
+);
+
+assert(
+  castJs.includes('CAST_STATE_CHANGED') &&
+  castJs.includes('castAvailability') &&
+  playerJs.includes("castState.castAvailability === 'NO_DEVICES_AVAILABLE'"),
+  'Cast diagnostics should distinguish no-device discovery from generic requestSession session_error'
 );
 
 assert(
