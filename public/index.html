@@ -688,14 +688,15 @@
         }
 
         #cast-btn svg path,
-        google-cast-launcher#cast-btn {
+        .cast-control {
             transition: all 0.2s ease-in-out;
         }
 
-        google-cast-launcher#cast-btn {
-            --connected-color: #3b82f6;
-            --disconnected-color: #9ca3af;
-            display: inline-block;
+        .cast-control {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             width: 2.25rem;
             height: 2.25rem;
             min-width: 2.25rem;
@@ -704,19 +705,41 @@
             cursor: pointer;
             border-radius: 0.375rem;
             vertical-align: middle;
+            color: #9ca3af;
         }
 
-        google-cast-launcher#cast-btn:hover {
-            --disconnected-color: #ffffff;
+        .cast-control:hover {
+            color: #ffffff;
             background-color: #374151;
         }
 
-        #cast-btn.cast-connected {
+        .cast-control.cast-connected {
             color: #3b82f6;
         }
 
-        #cast-btn.cast-connected:hover {
+        .cast-control.cast-connected:hover {
             color: #60a5fa;
+        }
+
+        .native-cast-launcher-overlay {
+            --connected-color: #3b82f6;
+            --disconnected-color: #9ca3af;
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            display: block !important;
+            width: 100%;
+            height: 100%;
+            min-width: 100%;
+            min-height: 100%;
+            padding: 0;
+            margin: 0;
+            opacity: 0.01;
+            cursor: pointer;
+        }
+
+        .native-cast-launcher-overlay:hover {
+            --disconnected-color: #ffffff;
         }
 
         .status-badge {
@@ -2365,8 +2388,12 @@
                         class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700" title="Refresh Stream">
                         <span data-icon="refresh"></span>
                     </button>
-                    <google-cast-launcher id="cast-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
-                        title="Cast to device" aria-label="Cast to device"></google-cast-launcher>
+                    <div id="cast-btn" class="cast-control text-gray-400 hover:text-white rounded-md hover:bg-gray-700"
+                        title="Cast to device" aria-label="Cast to device">
+                        <span data-icon="cast"></span>
+                        <google-cast-launcher id="native-cast-launcher" class="native-cast-launcher-overlay"
+                            title="Cast to device" aria-label="Cast to device"></google-cast-launcher>
+                    </div>
                     <button id="pip-btn" class="text-gray-400 hover:text-white p-2 rounded-md hover:bg-gray-700"
                         title="Picture-in-Picture">
                         <span data-icon="pip"></span>
@@ -2982,7 +3009,7 @@
     </div>
 
 
-    <script type="module" src="/js/main.js?v=20"></script>
+    <script type="module" src="/js/main.js?v=21"></script>
 
     <div id="processing-status-modal"
         class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4">

@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=20';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic } from './cast.js?v=21';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -624,77 +624,19 @@ export function setupPlayerEventListeners() {
     }
 
     if (UIElements.castBtn) {
-        if (UIElements.castBtn.tagName.toLowerCase() === 'google-cast-launcher') {
-            console.log('[PLAYER] Native google-cast-launcher controls Cast session requests; skipping custom requestSession click handler.');
+        const nativeCastLauncher = UIElements.castBtn.matches?.('google-cast-launcher')
+            ? UIElements.castBtn
+            : UIElements.castBtn.querySelector('google-cast-launcher');
+
+        if (nativeCastLauncher) {
+            console.log('[PLAYER] Native google-cast-launcher overlay controls Cast session requests; skipping custom requestSession click handler.');
         } else {
             UIElements.castBtn.addEventListener('click', () => {
-            console.log('[PLAYER] Visible cast button clicked. Requesting session synchronously...');
-            try {
-                recoverCastSdkFromGlobals();
-
-                if (castState.isAvailable && castState.isInitialized && window.cast?.framework) {
-                    const sessionRequest = cast.framework.CastContext.getInstance().requestSession();
-                    const castReportsNoDevices = castState.castAvailability === 'NO_DEVICES_AVAILABLE';
-                    if (castReportsNoDevices) {
-                        console.warn('[PLAYER] Chrome Cast availability reports no devices, but still calling requestSession because Chrome’s native Cast picker may have fresher discovery state.', {
-                            castAvailability: castState.castAvailability,
-                            origin: window.location.origin,
-                            hostname: window.location.hostname,
-                            isSecureContext: window.isSecureContext,
-                            castState
-                        });
-                    }
-                    sessionRequest.catch((error) => {
-                        console.error('Error requesting cast session:', error, {
-                            origin: window.location.origin,
-                            hostname: window.location.hostname,
-                            isSecureContext: window.isSecureContext,
-                            castState,
-                        });
-                        if (error !== "cancel") {
-                            const detail = typeof error === 'string' ? error : (error?.code || error?.description || 'unknown');
-                            showNotification(`Could not initiate Cast session (${detail}). See console for details.`, true);
-                        }
-                    });
-                    return;
-                }
-
+                console.warn('[PLAYER] Visible Cast control has no native google-cast-launcher overlay; manual Cast requests are disabled because they return session_error in this browser session.');
                 const originDiagnostic = getCastOriginDiagnostic();
-                if (originDiagnostic) {
-                    console.warn('[PLAYER] Cast session request blocked because the page is not running in a Cast-supported secure context.', {
-                        origin: window.location.origin,
-                        hostname: window.location.hostname,
-                        isSecureContext: window.isSecureContext,
-                        isAvailable: castState.isAvailable,
-                        isInitialized: castState.isInitialized
-                    });
-                    showNotification(`Cast is unavailable from this page: ${originDiagnostic}`, true, 10000);
-                    return;
-                }
-
-                if (!castState.isAvailable) {
-                    const browserDiagnostic = getCastBrowserDiagnostic();
-                    const detail = browserDiagnostic || castState.initializationError || 'Cast SDK is not available in this browser/session.';
-                    console.warn('[PLAYER] Cast clicked but SDK is unavailable.', {
-                        isAvailable: castState.isAvailable,
-                        initializationError: castState.initializationError,
-                        browserDiagnostic,
-                        userAgent: navigator.userAgent
-                    });
-                    showNotification(`Cast is unavailable: ${detail}`, true, 14000);
-                    return;
-                }
-
-                console.warn('[PLAYER] Cast clicked before CastContext initialization completed.', {
-                    isAvailable: castState.isAvailable,
-                    initializationError: castState.initializationError
-                });
-                const detail = castState.initializationError ? ` ${castState.initializationError}` : '';
-                showNotification(`Cast is still initializing. Please try again in a moment.${detail}`, true, 7000);
-            } catch (e) {
-                console.error('Fatal Error: Cast framework is not available.', e);
-                showNotification('Cast functionality is not available. Please try reloading.', true);
-            }
+                const browserDiagnostic = getCastBrowserDiagnostic();
+                const detail = originDiagnostic || browserDiagnostic || castState.initializationError || 'Native Cast launcher overlay is missing from the page.';
+                showNotification(`Cast is unavailable: ${detail}`, true, 14000);
             });
         }
     } else {

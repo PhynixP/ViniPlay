@@ -194,10 +194,10 @@ function handleCastSdkAvailability(isAvailable, error) {
         castState.isInitialized = false;
         castState.initializationError = unavailableReason;
         castState.initializationAttempts = 0;
-        // Optionally hide the cast button if the SDK is not available at all
-        if (UIElements.castBtn) {
-            UIElements.castBtn.style.display = 'none';
-        }
+        // Keep the visible Cast control rendered even when the SDK reports unavailable.
+        // The native google-cast-launcher can initialize late or hide its own internal icon;
+        // our first-party icon/overlay must remain visible so the user has a stable control.
+        console.warn('[CAST] Cast SDK is unavailable; leaving the visible Cast control in place for late native launcher recovery.');
     }
 }
 

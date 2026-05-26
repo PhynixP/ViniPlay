@@ -46,54 +46,43 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=20'),
-  'main.js must deep-cache-bust player.js after switching the visible Cast control to the native launcher'
+  mainJs.includes('./modules/player.js?v=21'),
+  'main.js must deep-cache-bust player.js after keeping the Cast icon visible while using the native launcher overlay'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=20'),
-  'player.js must deep-cache-bust cast.js after switching the visible Cast control to the native launcher'
+  playerJs.includes('./cast.js?v=21'),
+  'player.js must deep-cache-bust cast.js after keeping the Cast icon visible while using the native launcher overlay'
 );
 
 assert(
-  indexHtml.includes('<google-cast-launcher id="cast-btn"'),
-  'index.html should use the native google-cast-launcher as the visible Cast control because it is the only launch path confirmed to open Chrome device selection'
+  indexHtml.includes('id="cast-btn"') && indexHtml.includes('data-icon="cast"'),
+  'index.html should keep a first-party visible Cast icon so the control does not disappear when google-cast-launcher renders empty/hidden'
 );
 
 assert(
-  !indexHtml.includes('<button id="cast-btn"'),
-  'the visible #cast-btn should not be a custom button now that manual requestSession is known to return session_error in this Chrome session'
+  indexHtml.includes('<google-cast-launcher id="native-cast-launcher"') && indexHtml.includes('native-cast-launcher-overlay'),
+  'index.html should keep the native google-cast-launcher as an invisible overlay so Chrome owns the click path that opens the picker'
 );
 
 assert(
-  playerJs.includes("tagName.toLowerCase() === 'google-cast-launcher'") && playerJs.includes('Native google-cast-launcher controls Cast session requests'),
-  'player.js should skip the custom requestSession click handler when #cast-btn is the native google-cast-launcher'
+  indexHtml.includes('.cast-control') && indexHtml.includes('position: relative') && indexHtml.includes('.native-cast-launcher-overlay') && indexHtml.includes('opacity: 0.01'),
+  'CSS should reserve a visible Cast control and place the native launcher over it as the click target'
 );
 
 assert(
-  playerJs.includes('Visible cast button clicked. Requesting session synchronously') &&
-  playerJs.includes('CastContext.getInstance().requestSession()'),
-  'player.js should request the Cast session directly from the visible button click handler'
-);
-
-const requestSessionIndex = indexOfOrFail(playerJs, 'CastContext.getInstance().requestSession()', 'player.js should request a Cast session from the visible button');
-const noDevicesDiagnosticIndex = indexOfOrFail(playerJs, "castReportsNoDevices", 'player.js should retain NO_DEVICES_AVAILABLE diagnostics');
-assert(
-  castJs.includes('CAST_STATE_CHANGED') &&
-  castJs.includes('castAvailability') &&
-  playerJs.includes('but still calling requestSession') &&
-  !playerJs.includes('Chrome is not detecting any Cast devices'),
-  'Cast diagnostics may record NO_DEVICES_AVAILABLE, but the visible Cast button must still call requestSession because Chrome native Cast discovery can see devices while the Web Sender availability event reports NO_DEVICES_AVAILABLE'
+  playerJs.includes("querySelector('google-cast-launcher')") && playerJs.includes('Native google-cast-launcher overlay controls Cast session requests'),
+  'player.js should skip the custom requestSession click handler when #cast-btn contains the native google-cast-launcher overlay'
 );
 
 assert(
-  requestSessionIndex < noDevicesDiagnosticIndex,
-  'requestSession() should happen before NO_DEVICES_AVAILABLE logging so nothing between the user click and Cast picker launch can interfere with Chrome transient activation'
+  !playerJs.includes('CastContext.getInstance().requestSession()'),
+  'player.js should not manually request Cast sessions now that manual requestSession is known to return session_error in this Chrome session'
 );
 
 assert(
-  playerJs.includes('castState.isInitialized'),
-  'Cast button click should guard against using CastContext before setOptions initialization completes'
+  castJs.includes('Cast SDK is unavailable; leaving the visible Cast control in place') && !castJs.includes("UIElements.castBtn.style.display = 'none'"),
+  'cast.js should never hide the visible Cast control when SDK availability is unavailable/late because that made the button disappear'
 );
 
 assert(
@@ -105,27 +94,21 @@ assert(
   castJs.includes('getCastBrowserDiagnostic') &&
   castJs.includes('Chrome, Edge, or another Cast-supported Chromium browser') &&
   castJs.includes('navigator.userAgent') &&
-  playerJs.includes('browserDiagnostic'),
-  'Cast SDK unavailable diagnostics should explain unsupported browsers/sessions such as Safari, Firefox, iOS Chrome, or in-app browsers'
+  playerJs.includes('getCastBrowserDiagnostic'),
+  'fallback diagnostics should still explain unsupported browsers/sessions such as Safari, Firefox, iOS Chrome, or in-app browsers if the native launcher overlay is missing'
 );
 
 assert(
   castJs.includes('export function recoverCastSdkFromGlobals') &&
-  castJs.includes('Cast SDK callback did not mark availability, but framework globals are present') &&
-  playerJs.includes('recoverCastSdkFromGlobals()'),
-  'Cast button click should recover when Chrome exposes Cast framework globals but __onGCastApiAvailable did not mark the SDK available'
-);
-
-assert(
-  playerJs.includes('!castState.isAvailable') && playerJs.includes('Cast is unavailable') && playerJs.includes('castState.initializationError'),
-  'Cast button click should report SDK unavailability/secure-origin diagnostics instead of always saying Cast is still initializing'
+  castJs.includes('Cast SDK callback did not mark availability, but framework globals are present'),
+  'cast.js should retain late SDK recovery for initialization races even though native launcher clicks are no longer requested manually'
 );
 
 assert(
   castJs.includes('export function getCastOriginDiagnostic') &&
   playerJs.includes('getCastOriginDiagnostic') &&
-  playerJs.includes('Cast session request blocked because the page is not running in a Cast-supported secure context'),
-  'Cast button click should block requestSession with an HTTPS/localhost diagnostic before Chrome returns a generic session_error on insecure LAN origins'
+  playerJs.includes('Native Cast launcher overlay is missing from the page'),
+  'fallback Cast click diagnostics should explain origin/browser problems without calling manual requestSession'
 );
 
 console.log('Cast SDK initialization ordering regression checks passed.');
