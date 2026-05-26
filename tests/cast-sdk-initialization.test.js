@@ -46,12 +46,12 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=16'),
+  mainJs.includes('./modules/player.js?v=17'),
   'main.js must deep-cache-bust player.js after Cast launcher changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=16'),
+  playerJs.includes('./cast.js?v=17'),
   'player.js must deep-cache-bust cast.js after Cast launcher changes'
 );
 
@@ -94,6 +94,13 @@ assert(
   castJs.includes('navigator.userAgent') &&
   playerJs.includes('browserDiagnostic'),
   'Cast SDK unavailable diagnostics should explain unsupported browsers/sessions such as Safari, Firefox, iOS Chrome, or in-app browsers'
+);
+
+assert(
+  castJs.includes('export function recoverCastSdkFromGlobals') &&
+  castJs.includes('Cast SDK callback did not mark availability, but framework globals are present') &&
+  playerJs.includes('recoverCastSdkFromGlobals()'),
+  'Cast button click should recover when Chrome exposes Cast framework globals but __onGCastApiAvailable did not mark the SDK available'
 );
 
 assert(

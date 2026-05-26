@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic } from './cast.js?v=16';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=17';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -627,6 +627,8 @@ export function setupPlayerEventListeners() {
         UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Visible cast button clicked. Requesting session synchronously...');
             try {
+                recoverCastSdkFromGlobals();
+
                 if (castState.castAvailability === 'NO_DEVICES_AVAILABLE') {
                     console.warn('[PLAYER] Cast clicked, but Chrome reports no Cast devices are available.', {
                         castAvailability: castState.castAvailability,

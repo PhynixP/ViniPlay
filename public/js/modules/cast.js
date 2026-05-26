@@ -201,6 +201,27 @@ function handleCastSdkAvailability(isAvailable, error) {
     }
 }
 
+export function recoverCastSdkFromGlobals() {
+    if (castState.isInitialized) {
+        return true;
+    }
+    if (!window.cast?.framework || !window.chrome?.cast) {
+        return false;
+    }
+
+    console.warn('[CAST] Cast SDK callback did not mark availability, but framework globals are present. Recovering CastContext initialization from globals.', {
+        sdkResolved: window.__viniplayCastSdkResolved,
+        sdkReady: window.__viniplayCastSdkReady,
+        sdkError: window.__viniplayCastSdkError,
+        origin: window.location.origin,
+        userAgent: navigator.userAgent
+    });
+    castState.isAvailable = true;
+    castState.initializationError = null;
+    initializeCastApi();
+    return castState.isInitialized;
+}
+
 // The Google Cast SDK requires __onGCastApiAvailable to exist before cast_sender.js loads.
 // index.html captures that early callback, then calls this module initializer once modules load.
 window.__viniplayInitializeCastApi = handleCastSdkAvailability;
