@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=12';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=13';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility

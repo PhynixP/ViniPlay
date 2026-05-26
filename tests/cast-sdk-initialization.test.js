@@ -46,18 +46,26 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=12'),
+  mainJs.includes('./modules/player.js?v=13'),
   'main.js must deep-cache-bust player.js after Cast launcher changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=12'),
+  playerJs.includes('./cast.js?v=13'),
   'player.js must deep-cache-bust cast.js after Cast launcher changes'
 );
 
 assert(
   indexHtml.includes('<google-cast-launcher id="cast-btn"'),
   'index.html should use the official google-cast-launcher element so Chrome owns the Cast picker user activation path'
+);
+
+assert(
+  indexHtml.includes('google-cast-launcher#cast-btn') &&
+  indexHtml.includes('display: inline-block;') &&
+  indexHtml.includes('min-width: 2.25rem;') &&
+  indexHtml.includes('min-height: 2.25rem;'),
+  'google-cast-launcher defaults to inline/empty before upgrade; CSS must reserve visible button space so the Cast icon is not missing'
 );
 
 assert(
