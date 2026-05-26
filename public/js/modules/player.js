@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=19';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=20';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -624,7 +624,10 @@ export function setupPlayerEventListeners() {
     }
 
     if (UIElements.castBtn) {
-        UIElements.castBtn.addEventListener('click', () => {
+        if (UIElements.castBtn.tagName.toLowerCase() === 'google-cast-launcher') {
+            console.log('[PLAYER] Native google-cast-launcher controls Cast session requests; skipping custom requestSession click handler.');
+        } else {
+            UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Visible cast button clicked. Requesting session synchronously...');
             try {
                 recoverCastSdkFromGlobals();
@@ -692,7 +695,8 @@ export function setupPlayerEventListeners() {
                 console.error('Fatal Error: Cast framework is not available.', e);
                 showNotification('Cast functionality is not available. Please try reloading.', true);
             }
-        });
+            });
+        }
     } else {
         console.error('[PLAYER] CRITICAL: Cast button #cast-btn NOT FOUND.');
     }

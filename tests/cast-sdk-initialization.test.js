@@ -46,23 +46,28 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=19'),
-  'main.js must deep-cache-bust player.js after Cast availability handling changes'
+  mainJs.includes('./modules/player.js?v=20'),
+  'main.js must deep-cache-bust player.js after switching the visible Cast control to the native launcher'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=19'),
-  'player.js must deep-cache-bust cast.js after Cast availability handling changes'
+  playerJs.includes('./cast.js?v=20'),
+  'player.js must deep-cache-bust cast.js after switching the visible Cast control to the native launcher'
 );
 
 assert(
-  indexHtml.includes('<button id="cast-btn"') && indexHtml.includes('data-icon="cast"'),
-  'index.html should keep a visible custom Cast icon; google-cast-launcher can hide itself through SDK visibility management'
+  indexHtml.includes('<google-cast-launcher id="cast-btn"'),
+  'index.html should use the native google-cast-launcher as the visible Cast control because it is the only launch path confirmed to open Chrome device selection'
 );
 
 assert(
-  !indexHtml.includes('<google-cast-launcher id="cast-btn"'),
-  'the visible #cast-btn should not be google-cast-launcher because the framework may hide it when device discovery is unavailable'
+  !indexHtml.includes('<button id="cast-btn"'),
+  'the visible #cast-btn should not be a custom button now that manual requestSession is known to return session_error in this Chrome session'
+);
+
+assert(
+  playerJs.includes("tagName.toLowerCase() === 'google-cast-launcher'") && playerJs.includes('Native google-cast-launcher controls Cast session requests'),
+  'player.js should skip the custom requestSession click handler when #cast-btn is the native google-cast-launcher'
 );
 
 assert(
