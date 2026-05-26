@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ViniPlay Cast Diagnostic</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #05070b; color: #eef2ff; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { width: min(920px, 100%); background: linear-gradient(145deg, rgba(18,24,38,.98), rgba(8,12,22,.98)); border: 1px solid rgba(148,163,184,.25); border-radius: 24px; box-shadow: 0 24px 80px rgba(0,0,0,.45); padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 44px); letter-spacing: -0.04em; }
+    p { color: #b6c2d9; line-height: 1.55; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin: 22px 0; }
+    button, google-cast-launcher { min-height: 48px; border: 0; border-radius: 14px; background: #4f46e5; color: white; font-weight: 750; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0 18px; }
+    button.secondary { background: #0f172a; border: 1px solid rgba(148,163,184,.35); }
+    google-cast-launcher { background: #111827; border: 1px solid rgba(148,163,184,.35); }
+    pre { white-space: pre-wrap; word-break: break-word; background: #020617; border: 1px solid rgba(148,163,184,.2); border-radius: 16px; padding: 16px; max-height: 460px; overflow: auto; color: #dbeafe; }
+    .ok { color: #86efac; }
+    .bad { color: #fca5a5; }
+  </style>
+  <script>
+    const RECEIVER_APP_ID = 'CC1AD845';
+    window.__viniplayCastTestEvents = [];
+    function record(label, value) {
+      const entry = { at: new Date().toISOString(), label, value };
+      window.__viniplayCastTestEvents.push(entry);
+      const log = document.getElementById('log');
+      if (log) log.textContent = JSON.stringify(getDiagnostics(), null, 2);
+      console.log('[CAST-TEST]', label, value);
+    }
+    function getDiagnostics() {
+      const context = window.cast?.framework?.CastContext?.getInstance?.();
+      return {
+        href: location.href,
+        origin: location.origin,
+        isSecureContext: window.isSecureContext,
+        userAgent: navigator.userAgent,
+        castFramework: !!window.cast?.framework,
+        chromeCast: !!window.chrome?.cast,
+        sdkResolved: window.__viniplayCastSdkResolved,
+        sdkReady: window.__viniplayCastSdkReady,
+        sdkError: window.__viniplayCastSdkError || null,
+        castState: context?.getCastState?.() || null,
+        sessionState: context?.getSessionState?.() || null,
+        currentSession: !!context?.getCurrentSession?.(),
+        events: window.__viniplayCastTestEvents.slice(-20)
+      };
+    }
+    window.__onGCastApiAvailable = function(isAvailable, error) {
+      window.__viniplayCastSdkResolved = true;
+      window.__viniplayCastSdkReady = !!isAvailable;
+      window.__viniplayCastSdkError = error || null;
+      record('sdk-callback', { isAvailable, error: error || null });
+      if (!isAvailable) return;
+      initializeFramework();
+    };
+    function initializeFramework() {
+      if (!window.cast?.framework || !window.chrome?.cast) {
+        record('framework-not-ready', { castFramework: !!window.cast?.framework, chromeCast: !!window.chrome?.cast });
+        setTimeout(initializeFramework, 250);
+        return;
+      }
+      const context = cast.framework.CastContext.getInstance();
+      context.setOptions({
+        receiverApplicationId: RECEIVER_APP_ID,
+        autoJoinPolicy: chrome.cast.AutoJoinPolicy.TAB_AND_ORIGIN_SCOPED
+      });
+      context.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED, event => record('cast-state-changed', event));
+      context.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, event => record('session-state-changed', event));
+      record('framework-initialized', getDiagnostics());
+    }
+    function frameworkRequestSession() {
+      record('framework-request-before', getDiagnostics());
+      try {
+        const promise = cast.framework.CastContext.getInstance().requestSession();
+        promise.then(
+          result => record('framework-request-resolved', result || null),
+          error => record('framework-request-rejected', error)
+        );
+      } catch (error) {
+        record('framework-request-threw', String(error?.stack || error));
+      }
+    }
+    function legacyRequestSession() {
+      record('legacy-request-before', getDiagnostics());
+      try {
+        const sessionRequest = new chrome.cast.SessionRequest(RECEIVER_APP_ID);
+        const apiConfig = new chrome.cast.ApiConfig(
+          sessionRequest,
+          session => record('legacy-session-listener', { sessionId: session.sessionId, appId: session.appId }),
+          availability => record('legacy-receiver-availability', availability)
+        );
+        chrome.cast.initialize(
+          apiConfig,
+          () => chrome.cast.requestSession(
+            session => record('legacy-request-success', { sessionId: session.sessionId, appId: session.appId, receiver: session.receiver?.friendlyName || null }),
+            error => record('legacy-request-error', error)
+          ),
+          error => record('legacy-initialize-error', error)
+        );
+      } catch (error) {
+        record('legacy-request-threw', String(error?.stack || error));
+      }
+    }
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('framework-cast').addEventListener('click', frameworkRequestSession);
+      document.getElementById('legacy-cast').addEventListener('click', legacyRequestSession);
+      document.getElementById('refresh').addEventListener('click', () => record('manual-refresh', getDiagnostics()));
+      record('page-ready', getDiagnostics());
+    });
+  </script>
+  <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+</head>
+<body>
+  <main>
+    <h1>ViniPlay Cast Diagnostic</h1>
+    <p>This standalone page bypasses the IPTV player and tests three Cast launch paths from the same HTTPS origin. Use it to isolate whether <code>session_error</code> comes from ViniPlay's player code or from Chrome/Cast for this browser session.</p>
+    <div class="grid">
+      <button id="framework-cast">Framework requestSession()</button>
+      <button id="legacy-cast" class="secondary">Legacy chrome.cast.requestSession()</button>
+      <google-cast-launcher id="native-launcher"></google-cast-launcher>
+      <button id="refresh" class="secondary">Refresh diagnostics</button>
+    </div>
+    <p>After clicking a Cast option, copy the JSON below if it still fails.</p>
+    <pre id="log">Loading Cast diagnostics…</pre>
+  </main>
+</body>
+</html>
