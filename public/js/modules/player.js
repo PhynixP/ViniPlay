@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=13';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=14';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -624,29 +624,23 @@ export function setupPlayerEventListeners() {
     }
 
     if (UIElements.castBtn) {
-        if (UIElements.castBtn.tagName === 'GOOGLE-CAST-LAUNCHER') {
-            console.log('[PLAYER] Using native google-cast-launcher element for Cast session requests.');
-        } else {
         UIElements.castBtn.addEventListener('click', () => {
-            console.log('[PLAYER] Custom cast button clicked. Requesting session...');
+            console.log('[PLAYER] Visible cast button clicked. Requesting session synchronously...');
             try {
-                if (!castState.isAvailable) {
-                    const detail = castState.initializationError || 'Cast SDK is not available in this browser/session.';
-                    console.warn('[PLAYER] Cast clicked but SDK is unavailable.', {
-                        isAvailable: castState.isAvailable,
-                        initializationError: castState.initializationError
+                if (castState.isAvailable && castState.isInitialized && window.cast?.framework) {
+                    const sessionRequest = cast.framework.CastContext.getInstance().requestSession();
+                    sessionRequest.catch((error) => {
+                        console.error('Error requesting cast session:', error, {
+                            origin: window.location.origin,
+                            hostname: window.location.hostname,
+                            isSecureContext: window.isSecureContext,
+                            castState,
+                        });
+                        if (error !== "cancel") {
+                            const detail = typeof error === 'string' ? error : (error?.code || error?.description || 'unknown');
+                            showNotification(`Could not initiate Cast session (${detail}). See console for details.`, true);
+                        }
                     });
-                    showNotification(`Cast is unavailable: ${detail}`, true, 9000);
-                    return;
-                }
-
-                if (!castState.isInitialized) {
-                    console.warn('[PLAYER] Cast clicked before CastContext initialization completed.', {
-                        isAvailable: castState.isAvailable,
-                        initializationError: castState.initializationError
-                    });
-                    const detail = castState.initializationError ? ` ${castState.initializationError}` : '';
-                    showNotification(`Cast is still initializing. Please try again in a moment.${detail}`, true, 7000);
                     return;
                 }
 
@@ -663,25 +657,27 @@ export function setupPlayerEventListeners() {
                     return;
                 }
 
-                const castContext = cast.framework.CastContext.getInstance();
-                castContext.requestSession().catch((error) => {
-                    console.error('Error requesting cast session:', error, {
-                        origin: window.location.origin,
-                        hostname: window.location.hostname,
-                        isSecureContext: window.isSecureContext,
-                        castState,
+                if (!castState.isAvailable) {
+                    const detail = castState.initializationError || 'Cast SDK is not available in this browser/session.';
+                    console.warn('[PLAYER] Cast clicked but SDK is unavailable.', {
+                        isAvailable: castState.isAvailable,
+                        initializationError: castState.initializationError
                     });
-                    if (error !== "cancel") {
-                        const detail = typeof error === 'string' ? error : (error?.code || error?.description || 'unknown');
-                        showNotification(`Could not initiate Cast session (${detail}). See console for details.`, true);
-                    }
+                    showNotification(`Cast is unavailable: ${detail}`, true, 9000);
+                    return;
+                }
+
+                console.warn('[PLAYER] Cast clicked before CastContext initialization completed.', {
+                    isAvailable: castState.isAvailable,
+                    initializationError: castState.initializationError
                 });
+                const detail = castState.initializationError ? ` ${castState.initializationError}` : '';
+                showNotification(`Cast is still initializing. Please try again in a moment.${detail}`, true, 7000);
             } catch (e) {
                 console.error('Fatal Error: Cast framework is not available.', e);
                 showNotification('Cast functionality is not available. Please try reloading.', true);
             }
         });
-        }
     } else {
         console.error('[PLAYER] CRITICAL: Cast button #cast-btn NOT FOUND.');
     }

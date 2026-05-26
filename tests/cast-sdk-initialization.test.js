@@ -46,32 +46,29 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=13'),
+  mainJs.includes('./modules/player.js?v=14'),
   'main.js must deep-cache-bust player.js after Cast launcher changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=13'),
+  playerJs.includes('./cast.js?v=14'),
   'player.js must deep-cache-bust cast.js after Cast launcher changes'
 );
 
 assert(
-  indexHtml.includes('<google-cast-launcher id="cast-btn"'),
-  'index.html should use the official google-cast-launcher element so Chrome owns the Cast picker user activation path'
+  indexHtml.includes('<button id="cast-btn"') && indexHtml.includes('data-icon="cast"'),
+  'index.html should keep a visible custom Cast icon; google-cast-launcher can hide itself through SDK visibility management'
 );
 
 assert(
-  indexHtml.includes('google-cast-launcher#cast-btn') &&
-  indexHtml.includes('display: inline-block;') &&
-  indexHtml.includes('min-width: 2.25rem;') &&
-  indexHtml.includes('min-height: 2.25rem;'),
-  'google-cast-launcher defaults to inline/empty before upgrade; CSS must reserve visible button space so the Cast icon is not missing'
+  !indexHtml.includes('<google-cast-launcher id="cast-btn"'),
+  'the visible #cast-btn should not be google-cast-launcher because the framework may hide it when device discovery is unavailable'
 );
 
 assert(
-  playerJs.includes("UIElements.castBtn.tagName === 'GOOGLE-CAST-LAUNCHER'") &&
-  playerJs.includes('Using native google-cast-launcher element for Cast session requests'),
-  'player.js should not call requestSession manually when the official google-cast-launcher element is present'
+  playerJs.includes('Visible cast button clicked. Requesting session synchronously') &&
+  playerJs.includes('CastContext.getInstance().requestSession()'),
+  'player.js should request the Cast session directly from the visible button click handler'
 );
 
 assert(
