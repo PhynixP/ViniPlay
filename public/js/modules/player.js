@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState } from './cast.js?v=10';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=11';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -647,9 +647,27 @@ export function setupPlayerEventListeners() {
                     return;
                 }
 
+                const originDiagnostic = getCastOriginDiagnostic();
+                if (originDiagnostic) {
+                    console.warn('[PLAYER] Cast session request blocked because the page is not running in a Cast-supported secure context.', {
+                        origin: window.location.origin,
+                        hostname: window.location.hostname,
+                        isSecureContext: window.isSecureContext,
+                        isAvailable: castState.isAvailable,
+                        isInitialized: castState.isInitialized
+                    });
+                    showNotification(`Cast is unavailable from this page: ${originDiagnostic}`, true, 10000);
+                    return;
+                }
+
                 const castContext = cast.framework.CastContext.getInstance();
                 castContext.requestSession().catch((error) => {
-                    console.error('Error requesting cast session:', error);
+                    console.error('Error requesting cast session:', error, {
+                        origin: window.location.origin,
+                        hostname: window.location.hostname,
+                        isSecureContext: window.isSecureContext,
+                        castState,
+                    });
                     if (error !== "cancel") {
                         const detail = typeof error === 'string' ? error : (error?.code || error?.description || 'unknown');
                         showNotification(`Could not initiate Cast session (${detail}). See console for details.`, true);

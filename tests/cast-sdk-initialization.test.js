@@ -46,13 +46,13 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=10'),
-  'main.js must deep-cache-bust player.js after Cast initialization retry changes'
+  mainJs.includes('./modules/player.js?v=11'),
+  'main.js must deep-cache-bust player.js after Cast session diagnostics changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=10'),
-  'player.js must deep-cache-bust cast.js after Cast initialization retry changes'
+  playerJs.includes('./cast.js?v=11'),
+  'player.js must deep-cache-bust cast.js after Cast session diagnostics changes'
 );
 
 assert(
@@ -68,6 +68,13 @@ assert(
 assert(
   playerJs.includes('!castState.isAvailable') && playerJs.includes('Cast is unavailable') && playerJs.includes('castState.initializationError'),
   'Cast button click should report SDK unavailability/secure-origin diagnostics instead of always saying Cast is still initializing'
+);
+
+assert(
+  castJs.includes('export function getCastOriginDiagnostic') &&
+  playerJs.includes('getCastOriginDiagnostic') &&
+  playerJs.includes('Cast session request blocked because the page is not running in a Cast-supported secure context'),
+  'Cast button click should block requestSession with an HTTPS/localhost diagnostic before Chrome returns a generic session_error on insecure LAN origins'
 );
 
 console.log('Cast SDK initialization ordering regression checks passed.');

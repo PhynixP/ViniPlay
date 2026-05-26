@@ -12,10 +12,18 @@ const CAST_INITIALIZATION_RETRY_DELAY_MS = 250;
 const CAST_INITIALIZATION_MAX_ATTEMPTS = 20;
 const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
+export function getCastOriginDiagnostic() {
+    if (!window.isSecureContext && !LOCALHOST_NAMES.has(window.location.hostname)) {
+        return `Google Cast requires HTTPS or localhost in modern Chrome. Open ViniPlay through an HTTPS URL instead of ${window.location.origin}.`;
+    }
+    return null;
+}
+
 function describeCastUnavailableReason(error) {
     const detail = error ? String(error) : 'Cast SDK reported unavailable';
-    if (!window.isSecureContext && !LOCALHOST_NAMES.has(window.location.hostname)) {
-        return `Google Cast requires HTTPS or localhost in modern Chrome. Open ViniPlay through an HTTPS URL instead of ${window.location.origin}. SDK detail: ${detail}`;
+    const originDiagnostic = getCastOriginDiagnostic();
+    if (originDiagnostic) {
+        return `${originDiagnostic} SDK detail: ${detail}`;
     }
     return detail;
 }
