@@ -46,13 +46,13 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=17'),
-  'main.js must deep-cache-bust player.js after Cast launcher changes'
+  mainJs.includes('./modules/player.js?v=18'),
+  'main.js must deep-cache-bust player.js after Cast availability handling changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=17'),
-  'player.js must deep-cache-bust cast.js after Cast launcher changes'
+  playerJs.includes('./cast.js?v=18'),
+  'player.js must deep-cache-bust cast.js after Cast availability handling changes'
 );
 
 assert(
@@ -74,8 +74,9 @@ assert(
 assert(
   castJs.includes('CAST_STATE_CHANGED') &&
   castJs.includes('castAvailability') &&
-  playerJs.includes("castState.castAvailability === 'NO_DEVICES_AVAILABLE'"),
-  'Cast diagnostics should distinguish no-device discovery from generic requestSession session_error'
+  playerJs.includes('but still calling requestSession') &&
+  !playerJs.includes('Chrome is not detecting any Cast devices'),
+  'Cast diagnostics may record NO_DEVICES_AVAILABLE, but the visible Cast button must still call requestSession because Chrome native Cast discovery can see devices while the Web Sender availability event reports NO_DEVICES_AVAILABLE'
 );
 
 assert(

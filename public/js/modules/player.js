@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=17';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic, recoverCastSdkFromGlobals } from './cast.js?v=18';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -629,16 +629,15 @@ export function setupPlayerEventListeners() {
             try {
                 recoverCastSdkFromGlobals();
 
-                if (castState.castAvailability === 'NO_DEVICES_AVAILABLE') {
-                    console.warn('[PLAYER] Cast clicked, but Chrome reports no Cast devices are available.', {
+                const castReportsNoDevices = castState.castAvailability === 'NO_DEVICES_AVAILABLE';
+                if (castReportsNoDevices) {
+                    console.warn('[PLAYER] Chrome Cast availability reports no devices, but still calling requestSession because Chrome’s native Cast picker may have fresher discovery state.', {
                         castAvailability: castState.castAvailability,
                         origin: window.location.origin,
                         hostname: window.location.hostname,
                         isSecureContext: window.isSecureContext,
                         castState
                     });
-                    showNotification('Chrome is not detecting any Cast devices. Check that this browser and the Chromecast are on the same LAN/Wi‑Fi, not isolated by VPN/guest Wi‑Fi/VLAN, and that Chrome’s built-in Cast menu can see the device.', true, 12000);
-                    return;
                 }
 
                 if (castState.isAvailable && castState.isInitialized && window.cast?.framework) {
