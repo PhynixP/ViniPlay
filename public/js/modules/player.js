@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState } from './cast.js';
+import { castState, loadMedia, setLocalPlayerState } from './cast.js?v=8';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -627,11 +627,21 @@ export function setupPlayerEventListeners() {
         UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Custom cast button clicked. Requesting session...');
             try {
+                if (!castState.isInitialized) {
+                    console.warn('[PLAYER] Cast clicked before CastContext initialization completed.', {
+                        isAvailable: castState.isAvailable,
+                        initializationError: castState.initializationError
+                    });
+                    showNotification('Cast is still initializing. Please try again in a moment.', true);
+                    return;
+                }
+
                 const castContext = cast.framework.CastContext.getInstance();
                 castContext.requestSession().catch((error) => {
                     console.error('Error requesting cast session:', error);
                     if (error !== "cancel") {
-                        showNotification('Could not initiate Cast session. See console for details.', true);
+                        const detail = typeof error === 'string' ? error : (error?.code || error?.description || 'unknown');
+                        showNotification(`Could not initiate Cast session (${detail}). See console for details.`, true);
                     }
                 });
             } catch (e) {

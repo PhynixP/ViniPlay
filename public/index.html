@@ -11,7 +11,20 @@
     <!-- Shaka Player for VOD playback -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.0/shaka-player.compiled.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
-    <!-- NEW: Google Cast Framework -->
+    <!-- Google Cast Framework: define the SDK callback before loading Google's script. -->
+    <script>
+        window.__viniplayCastSdkResolved = false;
+        window.__viniplayCastSdkReady = false;
+        window.__viniplayCastSdkError = null;
+        window.__onGCastApiAvailable = function(isAvailable, error) {
+            window.__viniplayCastSdkResolved = true;
+            window.__viniplayCastSdkReady = Boolean(isAvailable);
+            window.__viniplayCastSdkError = error || null;
+            if (typeof window.__viniplayInitializeCastApi === 'function') {
+                window.__viniplayInitializeCastApi(isAvailable, error);
+            }
+        };
+    </script>
     <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
     <!-- NEW: Gridstack.js for Multi-View -->
     <link href="https://cdn.jsdelivr.net/npm/gridstack@10.1.2/dist/gridstack.min.css" rel="stylesheet" />
@@ -2951,7 +2964,7 @@
     </div>
 
 
-    <script type="module" src="/js/main.js?v=7"></script>
+    <script type="module" src="/js/main.js?v=8"></script>
 
     <div id="processing-status-modal"
         class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[70] p-4">

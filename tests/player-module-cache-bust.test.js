@@ -20,8 +20,8 @@ for (const file of files) {
 
 const mainHtml = fs.readFileSync(path.join(__dirname, '..', 'public/index.html'), 'utf8');
 assert(
-  mainHtml.includes('/js/main.js?v=7'),
-  'index.html should bump the main module query when VOD player-selection code changes'
+  mainHtml.includes('/js/main.js?v=8'),
+  'index.html should bump the main module query when player/cast code changes'
 );
 
 console.log('Player module cache-bust regression checks passed.');

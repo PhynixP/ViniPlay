@@ -17,6 +17,8 @@ export const castState = {
     playerController: null,
     currentMedia: null,
     currentCastStreamUrl: null, // Track the current Cast stream URL for cleanup
+    isInitialized: false,
+    initializationError: null,
     localPlayerState: {
         streamUrl: null,
         name: null,
@@ -71,6 +73,17 @@ export function setLocalPlayerState(streamUrl, name, logo, originalUrl = null, p
  * THIS IS NO LONGER CALLED DIRECTLY. It's wrapped in the __onGCastApiAvailable callback.
  */
 function initializeCastApi() {
+    if (castState.isInitialized) {
+        console.log('[CAST] Cast context already initialized.');
+        return;
+    }
+
+    if (!window.cast?.framework || !window.chrome?.cast) {
+        castState.initializationError = 'Cast framework globals are not available yet.';
+        console.warn('[CAST] Cannot initialize Cast context:', castState.initializationError);
+        return;
+    }
+
     console.log('[CAST] Cast SDK is available. Initializing context...');
     const castContext = cast.framework.CastContext.getInstance();
     castContext.setOptions({
@@ -89,25 +102,34 @@ function initializeCastApi() {
         cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED,
         handleRemotePlayerConnectionChange
     );
+    castState.isInitialized = true;
+    castState.initializationError = null;
 }
 
-// --- FINAL FIX ---
-// This is the official callback provided by the Google Cast SDK.
-// It will be executed automatically by the SDK script once it has fully loaded and is ready.
-// We wrap our entire initialization logic in here to prevent timing issues.
-window['__onGCastApiAvailable'] = (isAvailable) => {
+function handleCastSdkAvailability(isAvailable, error) {
     if (isAvailable) {
         castState.isAvailable = true;
         initializeCastApi();
     } else {
-        console.warn('[CAST] Cast SDK is not available on this device.');
+        console.warn('[CAST] Cast SDK is not available on this device.', error || '');
         castState.isAvailable = false;
+        castState.isInitialized = false;
+        castState.initializationError = error || 'Cast SDK reported unavailable';
         // Optionally hide the cast button if the SDK is not available at all
         if (UIElements.castBtn) {
             UIElements.castBtn.style.display = 'none';
         }
     }
-};
+}
+
+// The Google Cast SDK requires __onGCastApiAvailable to exist before cast_sender.js loads.
+// index.html captures that early callback, then calls this module initializer once modules load.
+window.__viniplayInitializeCastApi = handleCastSdkAvailability;
+
+// If the SDK callback fired before this ES module loaded, consume the captured result now.
+if (window.__viniplayCastSdkResolved) {
+    handleCastSdkAvailability(window.__viniplayCastSdkReady, window.__viniplayCastSdkError);
+}
 
 
 /**
