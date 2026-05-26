@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic } from './cast.js?v=15';
+import { castState, loadMedia, setLocalPlayerState, getCastOriginDiagnostic, getCastBrowserDiagnostic } from './cast.js?v=16';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -670,12 +670,15 @@ export function setupPlayerEventListeners() {
                 }
 
                 if (!castState.isAvailable) {
-                    const detail = castState.initializationError || 'Cast SDK is not available in this browser/session.';
+                    const browserDiagnostic = getCastBrowserDiagnostic();
+                    const detail = browserDiagnostic || castState.initializationError || 'Cast SDK is not available in this browser/session.';
                     console.warn('[PLAYER] Cast clicked but SDK is unavailable.', {
                         isAvailable: castState.isAvailable,
-                        initializationError: castState.initializationError
+                        initializationError: castState.initializationError,
+                        browserDiagnostic,
+                        userAgent: navigator.userAgent
                     });
-                    showNotification(`Cast is unavailable: ${detail}`, true, 9000);
+                    showNotification(`Cast is unavailable: ${detail}`, true, 14000);
                     return;
                 }
 

@@ -19,11 +19,33 @@ export function getCastOriginDiagnostic() {
     return null;
 }
 
+export function getCastBrowserDiagnostic() {
+    const ua = navigator.userAgent || '';
+    const vendor = navigator.vendor || '';
+    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isFirefox = /Firefox\//.test(ua);
+    const isSafari = /Safari\//.test(ua) && !/Chrome|Chromium|CriOS|Edg\//.test(ua);
+    const isInAppBrowser = /FBAN|FBAV|Instagram|Line\/|Twitter|Telegram|WhatsApp/.test(ua);
+    const isChromiumLike = /Chrome|Chromium|Edg\//.test(ua) && /Google Inc\.|Microsoft/.test(vendor || 'Google Inc.');
+
+    if (isIOS) {
+        return 'Google Cast web sender is not supported on iOS browsers, including iOS Chrome. Open ViniPlay from Chrome or Edge on macOS/Windows/Linux/ChromeOS/Android.';
+    }
+    if (isFirefox || isSafari || isInAppBrowser || !isChromiumLike) {
+        return 'Google Cast web sender requires Chrome, Edge, or another Cast-supported Chromium browser/session. It is not available in Safari, Firefox, iOS Chrome, or many in-app browsers.';
+    }
+    return null;
+}
+
 function describeCastUnavailableReason(error) {
     const detail = error ? String(error) : 'Cast SDK reported unavailable';
     const originDiagnostic = getCastOriginDiagnostic();
     if (originDiagnostic) {
         return `${originDiagnostic} SDK detail: ${detail}`;
+    }
+    const browserDiagnostic = getCastBrowserDiagnostic();
+    if (browserDiagnostic) {
+        return `${browserDiagnostic} SDK detail: ${detail}`;
     }
     return detail;
 }

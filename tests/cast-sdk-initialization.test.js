@@ -46,12 +46,12 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=15'),
+  mainJs.includes('./modules/player.js?v=16'),
   'main.js must deep-cache-bust player.js after Cast launcher changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=15'),
+  playerJs.includes('./cast.js?v=16'),
   'player.js must deep-cache-bust cast.js after Cast launcher changes'
 );
 
@@ -86,6 +86,14 @@ assert(
 assert(
   castJs.includes('window.isSecureContext') && castJs.includes('Google Cast requires HTTPS') && castJs.includes('localhost'),
   'cast.js should diagnose insecure-origin Cast unavailability instead of treating it as a generic initialization race'
+);
+
+assert(
+  castJs.includes('getCastBrowserDiagnostic') &&
+  castJs.includes('Chrome, Edge, or another Cast-supported Chromium browser') &&
+  castJs.includes('navigator.userAgent') &&
+  playerJs.includes('browserDiagnostic'),
+  'Cast SDK unavailable diagnostics should explain unsupported browsers/sessions such as Safari, Firefox, iOS Chrome, or in-app browsers'
 );
 
 assert(
