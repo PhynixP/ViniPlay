@@ -7,7 +7,7 @@ import { appState, guideState, UIElements } from './state.js';
 // MODIFIED: Added stopStream to the import
 import { saveUserSetting, stopStream, startRedirectStream, stopRedirectStream } from './api.js';
 import { showNotification, openModal, closeModal } from './ui.js';
-import { castState, loadMedia, setLocalPlayerState } from './cast.js?v=9';
+import { castState, loadMedia, setLocalPlayerState } from './cast.js?v=10';
 import { logToPlayerConsole } from './player_direct.js';
 import { ICONS } from './icons.js'; // NEW: Import ICONS
 import { getCodecName } from './codecs.js'; // NEW: Import codec utility
@@ -627,12 +627,23 @@ export function setupPlayerEventListeners() {
         UIElements.castBtn.addEventListener('click', () => {
             console.log('[PLAYER] Custom cast button clicked. Requesting session...');
             try {
+                if (!castState.isAvailable) {
+                    const detail = castState.initializationError || 'Cast SDK is not available in this browser/session.';
+                    console.warn('[PLAYER] Cast clicked but SDK is unavailable.', {
+                        isAvailable: castState.isAvailable,
+                        initializationError: castState.initializationError
+                    });
+                    showNotification(`Cast is unavailable: ${detail}`, true, 9000);
+                    return;
+                }
+
                 if (!castState.isInitialized) {
                     console.warn('[PLAYER] Cast clicked before CastContext initialization completed.', {
                         isAvailable: castState.isAvailable,
                         initializationError: castState.initializationError
                     });
-                    showNotification('Cast is still initializing. Please try again in a moment.', true);
+                    const detail = castState.initializationError ? ` ${castState.initializationError}` : '';
+                    showNotification(`Cast is still initializing. Please try again in a moment.${detail}`, true, 7000);
                     return;
                 }
 

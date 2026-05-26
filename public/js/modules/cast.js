@@ -10,6 +10,15 @@ import { stopStream } from './api.js';
 const APPLICATION_ID = 'CC1AD845'; // Default Media Receiver App ID
 const CAST_INITIALIZATION_RETRY_DELAY_MS = 250;
 const CAST_INITIALIZATION_MAX_ATTEMPTS = 20;
+const LOCALHOST_NAMES = new Set(['localhost', '127.0.0.1', '::1']);
+
+function describeCastUnavailableReason(error) {
+    const detail = error ? String(error) : 'Cast SDK reported unavailable';
+    if (!window.isSecureContext && !LOCALHOST_NAMES.has(window.location.hostname)) {
+        return `Google Cast requires HTTPS or localhost in modern Chrome. Open ViniPlay through an HTTPS URL instead of ${window.location.origin}. SDK detail: ${detail}`;
+    }
+    return detail;
+}
 
 export const castState = {
     isAvailable: false,
@@ -99,26 +108,31 @@ function initializeCastApi() {
     }
 
     console.log('[CAST] Cast SDK is available. Initializing context...');
-    const castContext = cast.framework.CastContext.getInstance();
-    castContext.setOptions({
-        receiverApplicationId: APPLICATION_ID,
-        autoJoinPolicy: chrome.cast.AutoJoinPolicy.TAB_AND_ORIGIN_SCOPED
-    });
+    try {
+        const castContext = cast.framework.CastContext.getInstance();
+        castContext.setOptions({
+            receiverApplicationId: APPLICATION_ID,
+            autoJoinPolicy: chrome.cast.AutoJoinPolicy.TAB_AND_ORIGIN_SCOPED
+        });
 
-    castContext.addEventListener(
-        cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
-        handleSessionStateChange
-    );
+        castContext.addEventListener(
+            cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
+            handleSessionStateChange
+        );
 
-    castState.player = new cast.framework.RemotePlayer();
-    castState.playerController = new cast.framework.RemotePlayerController(castState.player);
-    castState.playerController.addEventListener(
-        cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED,
-        handleRemotePlayerConnectionChange
-    );
-    castState.isInitialized = true;
-    castState.initializationError = null;
-    castState.initializationAttempts = 0;
+        castState.player = new cast.framework.RemotePlayer();
+        castState.playerController = new cast.framework.RemotePlayerController(castState.player);
+        castState.playerController.addEventListener(
+            cast.framework.RemotePlayerEventType.IS_CONNECTED_CHANGED,
+            handleRemotePlayerConnectionChange
+        );
+        castState.isInitialized = true;
+        castState.initializationError = null;
+        castState.initializationAttempts = 0;
+    } catch (error) {
+        castState.initializationError = `CastContext initialization failed: ${error?.message || error}`;
+        console.error('[CAST] Cannot initialize Cast context:', castState.initializationError, error);
+    }
 }
 
 function handleCastSdkAvailability(isAvailable, error) {
@@ -126,10 +140,11 @@ function handleCastSdkAvailability(isAvailable, error) {
         castState.isAvailable = true;
         initializeCastApi();
     } else {
-        console.warn('[CAST] Cast SDK is not available on this device.', error || '');
+        const unavailableReason = describeCastUnavailableReason(error);
+        console.warn('[CAST] Cast SDK is not available on this device.', unavailableReason);
         castState.isAvailable = false;
         castState.isInitialized = false;
-        castState.initializationError = error || 'Cast SDK reported unavailable';
+        castState.initializationError = unavailableReason;
         castState.initializationAttempts = 0;
         // Optionally hide the cast button if the SDK is not available at all
         if (UIElements.castBtn) {

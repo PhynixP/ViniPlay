@@ -46,18 +46,28 @@ assert(
 );
 
 assert(
-  mainJs.includes('./modules/player.js?v=9'),
+  mainJs.includes('./modules/player.js?v=10'),
   'main.js must deep-cache-bust player.js after Cast initialization retry changes'
 );
 
 assert(
-  playerJs.includes('./cast.js?v=9'),
+  playerJs.includes('./cast.js?v=10'),
   'player.js must deep-cache-bust cast.js after Cast initialization retry changes'
 );
 
 assert(
   playerJs.includes('castState.isInitialized'),
   'Cast button click should guard against using CastContext before setOptions initialization completes'
+);
+
+assert(
+  castJs.includes('window.isSecureContext') && castJs.includes('Google Cast requires HTTPS') && castJs.includes('localhost'),
+  'cast.js should diagnose insecure-origin Cast unavailability instead of treating it as a generic initialization race'
+);
+
+assert(
+  playerJs.includes('!castState.isAvailable') && playerJs.includes('Cast is unavailable') && playerJs.includes('castState.initializationError'),
+  'Cast button click should report SDK unavailability/secure-origin diagnostics instead of always saying Cast is still initializing'
 );
 
 console.log('Cast SDK initialization ordering regression checks passed.');
