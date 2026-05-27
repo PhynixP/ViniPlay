@@ -9,7 +9,7 @@
 import { appState, guideState, UIElements, dvrState } from './state.js';
 import { saveUserSetting } from './api.js';
 import { parseM3U, formatTimeWithOffset } from './utils.js';
-import { playChannel } from './player.js?v=7';
+import { playChannel } from './player.js?v=21';
 import { showNotification, openModal, closeModal } from './ui.js';
 import { addOrRemoveNotification, findNotificationForProgram } from './notification.js';
 import { addOrRemoveDvrJob, findDvrJobForProgram } from './dvr.js';

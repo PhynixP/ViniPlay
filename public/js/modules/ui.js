@@ -9,7 +9,7 @@ import { refreshUserList, updateUIFromSettings } from './settings.js';
 import { loadAndScheduleNotifications, renderNotifications } from './notification.js';
 import { initMultiView, isMultiViewActive, cleanupMultiView } from './multiview.js';
 import { initDvrPage } from './dvr.js';
-import { stopAndCleanupPlayer } from './player.js?v=7';
+import { stopAndCleanupPlayer } from './player.js?v=21';
 import { initDirectPlayer, isDirectPlayerActive, cleanupDirectPlayer } from './player_direct.js';
 // MODIFIED: Import handleGuideLoad and fetchConfig for the refresh logic
 import { finalizeGuideLoad, handleGuideLoad } from './guide.js';
