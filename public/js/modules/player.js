@@ -223,7 +223,8 @@ export const playChannel = (url, name, channelId) => {
                 if (historyId) {
                     currentRedirectHistoryId = historyId;
                 }
-            });
+            })
+            .catch(err => console.error('[PLAYER] Failed to log redirect stream:', err));
     }
     // --- End Activity Logging ---
 
@@ -405,7 +406,8 @@ async function playVodWithNativeVideo(streamUrlToPlay, title, logo, originalUrl,
                 if (historyId) {
                     currentRedirectHistoryId = historyId;
                 }
-            });
+            })
+            .catch(err => console.error('[PLAYER] Failed to log redirect stream:', err));
         currentLocalStreamUrl = null;
         currentProfileId = null;
     }

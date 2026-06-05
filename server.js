@@ -9,6 +9,8 @@ const crypto = require('crypto');
 const { spawn, exec } = require('child_process');
 const http = require('http');
 const https = require('https');
+const dns = require('dns');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
@@ -380,7 +382,7 @@ app.use(
         secret: sessionSecret,
         resave: false,
         saveUninitialized: false,
-        cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, secure: process.env.NODE_ENV === 'production' },
+        cookie: { maxAge: 30 * 24 * 60 * 60 * 1000, httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' },
     })
 );
 
@@ -419,8 +421,29 @@ const requireAuth = (req, res, next) => {
 };
 
 const requireAdmin = (req, res, next) => {
-    if (req.session && req.session.isAdmin) return next();
-    return res.status(403).json({ error: 'Administrator privileges required.' });
+    if (!req.session || !req.session.userId) {
+        return res.status(401).json({ error: 'Authentication required.' });
+    }
+    if (!req.session.isAdmin) {
+        return res.status(403).json({ error: 'Administrator privileges required.' });
+    }
+    // SECURITY: Re-check the database. A revoked or deleted admin's session
+    // cookie remains valid for up to 30 days; without this check they keep
+    // admin powers until the cookie expires.
+    db.get('SELECT isAdmin FROM users WHERE id = ?', [req.session.userId], (err, row) => {
+        if (err) {
+            console.error('[AUTH] requireAdmin DB error:', err.message);
+            return res.status(500).json({ error: 'Authentication check failed.' });
+        }
+        if (!row) {
+            req.session.destroy(() => {});
+            return res.status(401).json({ error: 'User no longer exists.' });
+        }
+        if (!row.isAdmin) {
+            return res.status(403).json({ error: 'Administrator privileges required.' });
+        }
+        next();
+    });
 };
 const requireDvrAccess = (req, res, next) => {
     if (req.session && (req.session.canUseDvr || req.session.isAdmin)) return next();
@@ -521,7 +544,7 @@ function extractVainfoGPUDetails(vainfo_stdout) {
 /**
  * NEW: Detects available hardware for transcoding.
  */
-async function detectHardwareAcceleration() {
+function detectHardwareAcceleration() {
 
     // When a new unhandled GPU is found, add the driver name to the appropriate
     // array of gpu drivers for detection.
@@ -530,21 +553,27 @@ async function detectHardwareAcceleration() {
     const intel_vaapi_gpu_drivers = ["i965_drv_video.so"];
 
     console.log('[HW] Detecting hardware acceleration capabilities...');
-    // Detect NVIDIA GPU
-    exec('nvidia-smi --query-gpu=gpu_name --format=csv,noheader', (err, stdout, stderr) => {
-        if (err || stderr) {
-            console.log('[HW] NVIDIA GPU not detected or nvidia-smi failed.');
-        } else {
-            const gpuName = stdout.trim();
-            detectedHardware.nvidia = gpuName;
-            console.log(`[HW] NVIDIA GPU detected: ${gpuName}`);
-        }
+
+    // Detect NVIDIA GPU. Wrapped in a promise so the caller can await the
+    // result before the server starts (exec is callback-based).
+    const detectNvidia = new Promise((resolve) => {
+        exec('nvidia-smi --query-gpu=gpu_name --format=csv,noheader', (err, stdout, stderr) => {
+            if (err || stderr) {
+                console.log('[HW] NVIDIA GPU not detected or nvidia-smi failed.');
+            } else {
+                const gpuName = stdout.trim();
+                detectedHardware.nvidia = gpuName;
+                console.log(`[HW] NVIDIA GPU detected: ${gpuName}`);
+            }
+            resolve();
+        });
     });
 
     // MODIFIED: Use 'vainfo' for more robust detection of AMD, Intel VA-API
     // and QSV GPUs. vainfo gives driver detection info on stderr and full
     // detected GPU detail on stdout.
-    exec('vainfo', (err, stdout, stderr) => {
+    const detectVaapi = new Promise((resolve) => {
+        exec('vainfo', (err, stdout, stderr) => {
         if (stderr) {
             let found = false;
             const trimmed_stdout = stdout.trim()
@@ -576,7 +605,11 @@ async function detectHardwareAcceleration() {
                 }
             }
         }
+        resolve();
+        });
     });
+
+    return Promise.all([detectNvidia, detectVaapi]);
 }
 
 // MODIFIED: This function is now mostly for multi-view scenarios.
@@ -1145,18 +1178,79 @@ async function triggerVodRefreshForProvider(provider, dbInstance, sendStatus = (
 
 // ... existing helper functions (fetchUrlContent, parseEpgTime, processAndMergeSources) remain the same ...
 
-function fetchUrlContent(url, options = {}, asBuffer = false) { // <-- MODIFIED
+// SECURITY: reject connections to loopback / private / link-local / multicast
+// addresses to prevent SSRF (e.g. probing http://127.0.0.1, cloud metadata at
+// http://169.254.169.254, or scanning internal RFC1918 ranges) via any endpoint
+// that fetches a user-supplied URL — /api/validate-url, /api/image-proxy,
+// M3U/EPG source ingestion.
+function isPrivateAddress(addr) {
+    if (net.isIPv4(addr)) {
+        const parts = addr.split('.').map(Number);
+        if (parts[0] === 0) return true;                                      // 0.0.0.0/8
+        if (parts[0] === 10) return true;                                     // 10.0.0.0/8
+        if (parts[0] === 127) return true;                                    // 127.0.0.0/8 loopback
+        if (parts[0] === 169 && parts[1] === 254) return true;                // 169.254.0.0/16 link-local + cloud metadata
+        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // 172.16.0.0/12
+        if (parts[0] === 192 && parts[1] === 168) return true;                // 192.168.0.0/16
+        if (parts[0] >= 224) return true;                                     // 224.0.0.0/4 multicast, 240.0.0.0/4 reserved
+        return false;
+    }
+    if (net.isIPv6(addr)) {
+        const lower = addr.toLowerCase();
+        if (lower === '::1' || lower === '0:0:0:0:0:0:0:1') return true;     // loopback
+        if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true;                    // fc00::/7 unique local
+        if (/^fe[89ab][0-9a-f]:/.test(lower)) return true;                    // fe80::/10 link-local
+        const m = lower.match(/^(?:::ffff:)(\d+\.\d+\.\d+\.\d+)$/);
+        if (m) return isPrivateAddress(m[1]);                                 // IPv4-mapped
+        return false;
+    }
+    return false;
+}
+
+// Used as the `lookup` option for http.get/https.get. Resolving here (and
+// passing the resolved address to the connection) closes the DNS-rebinding
+// TOCTOU window — the address that's checked is the address that's connected.
+function ssrfSafeLookup(hostname, options, callback) {
+    if (typeof options === 'function') { callback = options; options = {}; }
+    dns.lookup(hostname, options, (err, address, family) => {
+        if (err) return callback(err);
+        if (isPrivateAddress(address)) {
+            return callback(new Error(`Refusing to connect to private/internal address ${address} (resolved from ${hostname})`));
+        }
+        callback(null, address, family);
+    });
+}
+
+function fetchUrlContent(url, options = {}, asBuffer = false, redirectDepth = 0) { // <-- MODIFIED
     return new Promise((resolve, reject) => {
-        const protocol = url.startsWith('https') ? https : http;
+        const MAX_REDIRECTS = 5;
+        if (redirectDepth > MAX_REDIRECTS) {
+            return reject(new Error(`Too many redirects (>${MAX_REDIRECTS}) while fetching ${url}`));
+        }
+        // SECURITY: reject non-http(s) schemes (file://, gopher://, etc.).
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(url);
+        } catch (e) {
+            return reject(new Error(`Invalid URL: ${url}`));
+        }
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+            return reject(new Error(`Refusing non-http(s) URL: ${url}`));
+        }
+        const protocol = parsedUrl.protocol === 'https:' ? https : http;
         const TIMEOUT_DURATION = 60000;
         console.log(`[FETCH] Attempting to fetch URL content: ${url} (Timeout: ${TIMEOUT_DURATION / 1000}s)`);
 
-        const request = protocol.get(url, { timeout: TIMEOUT_DURATION, ...options }, (res) => { // <-- MODIFIED
+        // SSRF guard: caller-supplied options.lookup is honored to preserve
+        // any custom resolution behavior; default to ssrfSafeLookup otherwise.
+        const requestOptions = { timeout: TIMEOUT_DURATION, lookup: ssrfSafeLookup, ...options };
+        const request = protocol.get(url, requestOptions, (res) => { // <-- MODIFIED
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 console.log(`[FETCH] Redirecting to: ${res.headers.location}`);
                 request.abort();
-                // Pass the asBuffer flag through redirects
-                return fetchUrlContent(new URL(res.headers.location, url).href, options, asBuffer).then(resolve, reject);
+                // Pass the asBuffer flag through redirects, tracking depth to
+                // prevent infinite redirect loops from crashing the server.
+                return fetchUrlContent(new URL(res.headers.location, url).href, options, asBuffer, redirectDepth + 1).then(resolve, reject);
             }
             if (res.statusCode !== 200) {
                 console.error(`[FETCH] Failed to fetch ${url}: Status Code ${res.statusCode}`);
@@ -1225,8 +1319,6 @@ async function processAndMergeSources(req) {
 
     // --- NEW: Data holders for separated content ---
     let mergedLiveM3uContent = '#EXTM3U\n';
-    //let mergedVodMovies = [];
-    //let mergedVodSeries = [];
     let liveChannelIdSet = new Set(); // To track which channels need EPG
     const groupTitleRegex = /group-title="([^"]*)"/;
     // ---
@@ -1987,12 +2079,39 @@ app.delete('/api/users/:id', requireAdmin, (req, res) => {
     });
 });
 // --- Protected IPTV API Endpoints ---
+// SECURITY: strip credentials from m3uSources[*].xc_data before returning the
+// settings object to a client. xc_data contains the upstream IPTV provider's
+// plaintext username/password — these must never leave the server.
+function redactSettingsForClient(settings) {
+    if (!settings || typeof settings !== 'object') return settings;
+    const cloned = JSON.parse(JSON.stringify(settings));
+    if (Array.isArray(cloned.m3uSources)) {
+        cloned.m3uSources = cloned.m3uSources.map(src => {
+            if (src && typeof src.xc_data === 'string') {
+                try {
+                    const parsed = JSON.parse(src.xc_data);
+                    if (parsed && typeof parsed === 'object') {
+                        // Keep server URL so the client knows the provider host;
+                        // wipe credentials. Replace with a sentinel so the UI can
+                        // tell "set" from "unset" without seeing the actual value.
+                        if ('username' in parsed) parsed.username = parsed.username ? '__REDACTED__' : '';
+                        if ('password' in parsed) parsed.password = parsed.password ? '__REDACTED__' : '';
+                        src.xc_data = JSON.stringify(parsed);
+                    }
+                } catch (_) { /* leave malformed xc_data alone */ }
+            }
+            return src;
+        });
+    }
+    return cloned;
+}
+
 app.get('/api/config', requireAuth, async (req, res) => {
     try {
         // ADDED vodMovies and vodSeries
         let config = { m3uContent: null, epgContent: null, settings: {}, vodMovies: [], vodSeries: [] };
         let globalSettings = getSettings();
-        config.settings = globalSettings;
+        config.settings = redactSettingsForClient(globalSettings);
 
         // FETCH USER PERMISSIONS
         let allowedSources = null;
@@ -2127,12 +2246,16 @@ app.get('/api/config', requireAuth, async (req, res) => {
             // ... legacy code kept simple
             try {
                 config.vodMovies = JSON.parse(fs.readFileSync(VOD_MOVIES_JSON_PATH, 'utf-8'));
-            } catch (e) { }
+            } catch (e) {
+                console.warn(`[API] Could not parse VOD movies file (${VOD_MOVIES_JSON_PATH}): ${e.message}`);
+            }
         }
         if (fs.existsSync(VOD_SERIES_JSON_PATH)) {
             try {
                 config.vodSeries = JSON.parse(fs.readFileSync(VOD_SERIES_JSON_PATH, 'utf-8'));
-            } catch (e) { }
+            } catch (e) {
+                console.warn(`[API] Could not parse VOD series file (${VOD_SERIES_JSON_PATH}): ${e.message}`);
+            }
         }
         // --- END NEW VOD ---
 
@@ -2493,7 +2616,9 @@ app.get('/api/vod/series/:seriesId', requireAuth, async (req, res) => {
                     username: xcInfo.username,
                     password: xcInfo.password
                 });
-            } catch (e) { /* ignore */ }
+            } catch (e) {
+                console.warn(`[API] Skipping provider ${p.id} with invalid xc_data: ${e.message}`);
+            }
         });
 
 
@@ -2642,14 +2767,26 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
                     fs.unlinkSync(sourceToUpdate.path);
                 } catch (e) { console.error("[SOURCES_API] Could not delete old source file (on type change):", e); }
             }
-            sourceToUpdate.xc_data = xc;
-            sourceToUpdate.type = 'xc';
+            // SECURITY: the client receives xc_data with username/password
+            // replaced by the sentinel '__REDACTED__'. If the user edits the
+            // source without retyping credentials, the form may echo the
+            // sentinel back — preserve the previously-saved values instead of
+            // overwriting them with the placeholder.
             try {
-                const xcData = JSON.parse(xc);
-                sourceToUpdate.path = xcData.server || 'Xtream Codes Source';
+                const incoming = JSON.parse(xc);
+                let previous = {};
+                try { previous = JSON.parse(sourceToUpdate.xc_data || '{}'); } catch (_) {}
+                if (incoming && typeof incoming === 'object') {
+                    if (incoming.username === '__REDACTED__') incoming.username = previous.username || '';
+                    if (incoming.password === '__REDACTED__') incoming.password = previous.password || '';
+                }
+                sourceToUpdate.xc_data = JSON.stringify(incoming);
+                sourceToUpdate.path = incoming.server || 'Xtream Codes Source';
             } catch (e) {
+                sourceToUpdate.xc_data = xc;
                 sourceToUpdate.path = 'Xtream Codes Source';
             }
+            sourceToUpdate.type = 'xc';
         } else if (sourceToUpdate.type === 'file' && !req.file && (!sourceToUpdate.path || !fs.existsSync(sourceToUpdate.path))) {
             console.warn(`[SOURCES_API] Existing file source ${id} has no file and no new file/URL provided.`);
             return res.status(400).json({ error: 'Existing file source requires a new file if original is missing.' });
@@ -2750,7 +2887,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
 
         saveSettings(settings);
         console.log(`[SOURCES_API] Source ${id} updated successfully.`);
-        res.json({ success: true, message: 'Source updated successfully.', settings: getSettings() });
+        res.json({ success: true, message: 'Source updated successfully.', settings: redactSettingsForClient(getSettings()) });
 
     } else { // Add new source
         let newSource;
@@ -2850,7 +2987,7 @@ app.post('/api/sources', requireAuth, upload.single('sourceFile'), async (req, r
 
         saveSettings(settings);
         console.log(`[SOURCES_API] New source "${name}" added successfully (ID: ${newSource.id}).`);
-        res.json({ success: true, message: 'Source added successfully.', settings: getSettings() });
+        res.json({ success: true, message: 'Source added successfully.', settings: redactSettingsForClient(getSettings()) });
     }
 });
 
@@ -2879,7 +3016,7 @@ app.put('/api/sources/:sourceType/:id', requireAuth, (req, res) => {
 
     saveSettings(settings);
     console.log(`[SOURCES_API] Source ${id} partially updated.`);
-    res.json({ success: true, message: 'Source updated.', settings: getSettings() });
+    res.json({ success: true, message: 'Source updated.', settings: redactSettingsForClient(getSettings()) });
 });
 
 app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
@@ -2955,7 +3092,7 @@ app.delete('/api/sources/:sourceType/:id', requireAuth, async (req, res) => {
     }
     // --- END NEW ---
 
-    res.json({ success: true, message: 'Source deleted.', settings: getSettings() });
+    res.json({ success: true, message: 'Source deleted.', settings: redactSettingsForClient(getSettings()) });
 });
 
 app.post('/api/process-sources', requireAuth, async (req, res) => {
@@ -3005,7 +3142,7 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
             }
         }
 
-        res.json({ success: true, message: 'Settings saved.', settings: getSettings() });
+        res.json({ success: true, message: 'Settings saved.', settings: redactSettingsForClient(getSettings()) });
     } catch (error) {
         console.error("[API] Error saving global settings:", error);
         res.status(500).json({ error: "Could not save settings. Check server logs." });
@@ -3442,6 +3579,24 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
 
     console.log(`[STREAM] New request: URL=${streamUrl}, ProfileID=${profileId}, UserAgentID=${userAgentId}`);
     if (!streamUrl) return res.status(400).send('Error: `url` query parameter is required.');
+    // SECURITY: ffmpeg args are built by interpolating streamUrl into a command
+    // template and then tokenizing on whitespace. A streamUrl containing
+    // whitespace (or other shell-tokenization-relevant characters) could
+    // inject additional ffmpeg flags. Reject those URLs outright — legitimate
+    // stream URLs never contain whitespace, quotes, or control characters.
+    if (/[\s"'`\x00-\x1f]/.test(streamUrl)) {
+        console.error(`[STREAM] Rejecting streamUrl containing whitespace or shell metacharacters: ${JSON.stringify(streamUrl)}`);
+        return res.status(400).send('Error: `url` contains invalid characters.');
+    }
+    try {
+        const parsedStream = new URL(streamUrl);
+        if (!['http:', 'https:'].includes(parsedStream.protocol)) {
+            console.error(`[STREAM] Rejecting streamUrl with non-http(s) scheme: ${parsedStream.protocol}`);
+            return res.status(400).send('Error: `url` must use http or https.');
+        }
+    } catch (e) {
+        return res.status(400).send('Error: `url` is not a valid URL.');
+    }
 
     let settings = getSettings();
     // Check both streamProfiles and castProfiles arrays
@@ -4939,19 +5094,22 @@ app.get('/api/image-proxy', allowLocalOrAuth, (req, res) => {
             res.setHeader('Cache-Control', 'public, max-age=2592000'); // 30 days for cached images
             res.setHeader('X-Cache', 'HIT');
 
-            // Stream cached file
+            // Stream cached file. Register the error handler before piping so a
+            // read error that fires immediately is not left unhandled.
             const fileStream = fs.createReadStream(cacheFilePath);
-            fileStream.pipe(res);
-
             fileStream.on('error', (err) => {
                 console.error(`[IMAGE_PROXY] Error reading cached file:`, err.message);
                 // If cache is corrupted, delete and fall through to fetch
                 try {
                     fs.unlinkSync(cacheFilePath);
                     fs.unlinkSync(cacheMetaPath);
-                } catch (e) { }
-                res.status(500).send('Cache read error');
+                } catch (e) {
+                    console.warn(`[IMAGE_PROXY] Failed to remove corrupt cache entry: ${e.message}`);
+                }
+                if (!res.headersSent) res.status(500).send('Cache read error');
+                else res.destroy();
             });
+            fileStream.pipe(res);
 
             return;
         } catch (err) {
@@ -4962,14 +5120,26 @@ app.get('/api/image-proxy', allowLocalOrAuth, (req, res) => {
 
     console.log(`[IMAGE_PROXY] Fetching and caching image: ${imageUrl}`);
 
-    // Determine protocol (http or https)
-    const protocol = imageUrl.startsWith('https') ? https : http;
+    // SECURITY: enforce http(s)-only and SSRF guard before issuing the request.
+    let parsedImageUrl;
+    try { parsedImageUrl = new URL(imageUrl); } catch (e) { return res.status(400).send('Invalid URL'); }
+    if (parsedImageUrl.protocol !== 'http:' && parsedImageUrl.protocol !== 'https:') {
+        return res.status(400).send('URL must use http or https');
+    }
+    const protocol = parsedImageUrl.protocol === 'https:' ? https : http;
 
-    protocol.get(imageUrl, (imageRes) => {
+    protocol.get(imageUrl, { lookup: ssrfSafeLookup }, (imageRes) => {
+        // Reject non-success responses (e.g. a 404 HTML error page) before piping.
+        if (imageRes.statusCode !== 200) {
+            console.error(`[IMAGE_PROXY] Upstream returned status ${imageRes.statusCode} for ${imageUrl}`);
+            imageRes.resume(); // drain so the socket can be reused
+            return res.status(502).send('Failed to fetch image');
+        }
         // Check if response is an image
         const contentType = imageRes.headers['content-type'];
         if (!contentType || !contentType.startsWith('image/')) {
             console.error(`[IMAGE_PROXY] Invalid content type: ${contentType}`);
+            imageRes.resume();
             return res.status(400).send('URL does not point to an image');
         }
 
@@ -5007,7 +5177,10 @@ app.get('/api/image-proxy', allowLocalOrAuth, (req, res) => {
 
     }).on('error', (err) => {
         console.error(`[IMAGE_PROXY] Error fetching image from ${imageUrl}:`, err.message);
-        res.status(500).send('Failed to fetch image');
+        // Headers may already be sent if the error occurred mid-stream; guard
+        // against "Cannot set headers after they are sent".
+        if (!res.headersSent) res.status(500).send('Failed to fetch image');
+        else res.destroy();
     });
 });
 

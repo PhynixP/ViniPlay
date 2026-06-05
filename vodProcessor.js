@@ -1,6 +1,34 @@
 // vodProcessor.js
 const XtreamClient = require('./xtreamClient');
 
+// Helper: a try { BEGIN; ... COMMIT } block can fail BEFORE BEGIN was issued
+// (e.g. the upstream fetch threw). In that case an unconditional ROLLBACK
+// raises "cannot rollback - no transaction is active" and masks the real
+// error. Wrap rollback so failures are logged but don't shadow the upstream
+// exception.
+async function safeRollback(dbRun, db, phase) {
+    try {
+        await dbRun(db, "ROLLBACK");
+    } catch (rollbackErr) {
+        if (!/no transaction is active/i.test(rollbackErr.message || '')) {
+            console.warn(`[VOD Processor] ROLLBACK during ${phase} failed: ${rollbackErr.message}`);
+        }
+    }
+}
+
+// Helper: finalize prepared statements, ignoring null/already-finalized ones.
+// Used in finally blocks so the underlying SQLite write lock is released even
+// when the loop body threw — previously, statements created inside try blocks
+// were leaked on error paths until garbage collection eventually ran.
+function safeFinalize(...stmts) {
+    return Promise.all(stmts.map(s => {
+        if (!s) return Promise.resolve();
+        return new Promise(resolve => {
+            try { s.finalize(() => resolve()); } catch (_) { resolve(); }
+        });
+    }));
+}
+
 /**
  * Main function to refresh all VOD content for a given provider.
  * @param {sqlite.Database} db - The database instance.
@@ -50,11 +78,12 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
 
     // --- 0. Process Categories ---
     const categoryMap = new Map();
+    let categoryInsertStmt = null;
     try {
         sendStatus(`Fetching VOD and Series categories for ${provider.name}...`, 'info');
         const vodCategories = await client.getVodCategories();
         const seriesCategories = await client.getSeriesCategories();
-        
+
         const allCategories = {};
         if (vodCategories && Array.isArray(vodCategories)) {
             vodCategories.forEach(cat => allCategories[cat.category_id] = cat);
@@ -67,9 +96,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
         if (combinedCategories.length > 0) {
             console.log(`[VOD Processor] Fetched ${combinedCategories.length} combined VOD/Series categories from provider.`);
             sendStatus(`Processing ${combinedCategories.length} VOD/Series categories...`, 'info');
-            
+
             await dbRun(db, "BEGIN TRANSACTION");
-            const categoryInsertStmt = db.prepare(`INSERT OR IGNORE INTO vod_categories (category_id, category_name) VALUES (?, ?)`);
+            categoryInsertStmt = db.prepare(`INSERT OR IGNORE INTO vod_categories (category_id, category_name) VALUES (?, ?)`);
             for (const catData of combinedCategories) {
                 if (catData.category_id && catData.category_name) {
                     await new Promise((resolve, reject) => {
@@ -81,21 +110,32 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                     categoryMap.set(String(catData.category_id), catData.category_name);
                 }
             }
-            await new Promise(resolve => categoryInsertStmt.finalize(resolve));
+            await safeFinalize(categoryInsertStmt);
+            categoryInsertStmt = null;
             await dbRun(db, "COMMIT");
         }
     } catch (error) {
-        await dbRun(db, "ROLLBACK");
+        await safeRollback(dbRun, db, 'categories');
         console.error(`[VOD Processor] Category processing FAILED for ${provider.name}:`, error.message);
         sendStatus(`Category processing FAILED for ${provider.name}: ${error.message}`, 'error');
         return; // Stop if categories fail
+    } finally {
+        await safeFinalize(categoryInsertStmt);
     }
 
+    // Track success of movies/series phases. If either fails the stale-content
+    // cleanup at the end MUST be skipped, otherwise it will delete every
+    // provider_*_relations row whose last_seen wasn't updated this run — i.e.
+    // wipe the entire VOD catalog for this provider after a partial failure.
+    let moviesPhaseOk = false;
+    let seriesPhaseOk = false;
+
     // --- 1. Process Movies ---
+    let movieInsertStmt = null, movieUpdateStmt = null, relationInsertStmt = null;
     try {
         sendStatus(`Fetching movies for ${provider.name}...`, 'info');
         const movies = await client.getVodStreams();
-        
+
         if (movies && Array.isArray(movies)) {
             console.log(`[VOD Processor] Fetched ${movies.length} movies from provider.`);
             sendStatus(`Processing ${movies.length} movies...`, 'info');
@@ -105,10 +145,10 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
             const existingMovies = await dbAll(db, 'SELECT id, provider_unique_id FROM movies WHERE provider_unique_id IS NOT NULL');
             const providerUniqueIdMap = new Map(existingMovies.map(m => [m.provider_unique_id, m.id]));
 
-            const movieInsertStmt = db.prepare(`INSERT INTO movies (name, year, description, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?, ?)`);
-            const movieUpdateStmt = db.prepare(`UPDATE movies SET name = ?, year = ?, description = ?, logo = ?, category_name = ? WHERE id = ?`);
-            const relationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_movie_relations (provider_id, movie_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
-            
+            movieInsertStmt = db.prepare(`INSERT INTO movies (name, year, description, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?, ?)`);
+            movieUpdateStmt = db.prepare(`UPDATE movies SET name = ?, year = ?, description = ?, logo = ?, category_name = ? WHERE id = ?`);
+            relationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_movie_relations (provider_id, movie_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
+
             for (const movieData of movies) {
                 const { name, plot, stream_icon, stream_id, container_extension, category_id } = movieData;
                 if (!stream_id) continue;
@@ -141,22 +181,25 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
                 
                 await new Promise((resolve, reject) => relationInsertStmt.run(providerId, movieId, stream_id, container_extension || 'mp4', scanStartTime, (err) => err ? reject(err) : resolve()));
             }
-            await new Promise(resolve => movieInsertStmt.finalize(resolve));
-            await new Promise(resolve => movieUpdateStmt.finalize(resolve));
-            await new Promise(resolve => relationInsertStmt.finalize(resolve));
+            await safeFinalize(movieInsertStmt, movieUpdateStmt, relationInsertStmt);
+            movieInsertStmt = movieUpdateStmt = relationInsertStmt = null;
             await dbRun(db, "COMMIT");
         }
+        moviesPhaseOk = true;
     } catch (error) {
-        await dbRun(db, "ROLLBACK");
+        await safeRollback(dbRun, db, 'movies');
         console.error(`[VOD Processor] Movie processing FAILED for ${provider.name}:`, error.message);
         sendStatus(`Movie processing FAILED for ${provider.name}: ${error.message}`, 'error');
+    } finally {
+        await safeFinalize(movieInsertStmt, movieUpdateStmt, relationInsertStmt);
     }
 
     // --- 2. Process Series ---
+    let seriesInsertStmt = null, seriesUpdateStmt = null, seriesRelationInsertStmt = null;
     try {
         sendStatus(`Fetching series for ${provider.name}...`, 'info');
         const series = await client.getSeries();
-        
+
         if (series && Array.isArray(series)) {
             console.log(`[VOD Processor] Fetched ${series.length} series from provider.`);
             sendStatus(`Processing ${series.length} series...`, 'info');
@@ -166,9 +209,9 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
             const existingSeries = await dbAll(db, 'SELECT id, provider_unique_id FROM series WHERE provider_unique_id IS NOT NULL');
             const providerUniqueIdMap = new Map(existingSeries.map(s => [s.provider_unique_id, s.id]));
 
-            const seriesInsertStmt = db.prepare(`INSERT INTO series (name, year, description, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?, ?)`);
-            const seriesUpdateStmt = db.prepare(`UPDATE series SET name = ?, year = ?, description = ?, logo = ?, category_name = ? WHERE id = ?`);
-            const seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
+            seriesInsertStmt = db.prepare(`INSERT INTO series (name, year, description, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?, ?)`);
+            seriesUpdateStmt = db.prepare(`UPDATE series SET name = ?, year = ?, description = ?, logo = ?, category_name = ? WHERE id = ?`);
+            seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
 
             for (const seriesData of series) {
                 const { name, plot, cover, series_id: external_series_id, category_id } = seriesData;
@@ -202,15 +245,24 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
 
                 await new Promise((resolve, reject) => seriesRelationInsertStmt.run(providerId, seriesId, external_series_id, scanStartTime, (err) => err ? reject(err) : resolve()));
             }
-            await new Promise(resolve => seriesInsertStmt.finalize(resolve));
-            await new Promise(resolve => seriesUpdateStmt.finalize(resolve));
-            await new Promise(resolve => seriesRelationInsertStmt.finalize(resolve));
+            await safeFinalize(seriesInsertStmt, seriesUpdateStmt, seriesRelationInsertStmt);
+            seriesInsertStmt = seriesUpdateStmt = seriesRelationInsertStmt = null;
             await dbRun(db, "COMMIT");
         }
+        seriesPhaseOk = true;
     } catch (error) {
-        await dbRun(db, "ROLLBACK");
+        await safeRollback(dbRun, db, 'series');
         console.error(`[VOD Processor] Series processing FAILED for ${provider.name}:`, error.message);
         sendStatus(`Series processing FAILED for ${provider.name}: ${error.message}`, 'error');
+    } finally {
+        await safeFinalize(seriesInsertStmt, seriesUpdateStmt, seriesRelationInsertStmt);
+    }
+
+    if (!moviesPhaseOk || !seriesPhaseOk) {
+        const failed = !moviesPhaseOk && !seriesPhaseOk ? 'movies and series' : (!moviesPhaseOk ? 'movies' : 'series');
+        console.warn(`[VOD Processor] Skipping stale-content cleanup for ${provider.name} because the ${failed} phase failed — otherwise rows whose last_seen wasn't refreshed would be deleted, wiping the catalog.`);
+        sendStatus(`Skipped stale cleanup for ${provider.name} due to earlier failure.`, 'warning');
+        return;
     }
 
     // --- 4. Cleanup Stale Content ---
@@ -237,7 +289,7 @@ async function refreshVodContent(db, dbGet, dbAll, dbRun, provider, sendStatus =
         await dbRun(db, "COMMIT");
         console.log(`[VOD Processor] VOD cleanup completed for: ${provider.name}`);
     } catch (error) {
-        await dbRun(db, "ROLLBACK");
+        await safeRollback(dbRun, db, 'cleanup');
         console.error(`[VOD Processor] Cleanup FAILED for ${provider.name}:`, error.message);
         sendStatus(`Cleanup FAILED for ${provider.name}: ${error.message}`, 'error');
     }
@@ -261,6 +313,8 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
     const scanStartTime = new Date().toISOString();
     const providerId = provider.id;
 
+    let movieInsertStmt = null, movieRelationInsertStmt = null;
+    let seriesInsertStmt = null, seriesRelationInsertStmt = null;
     try {
         const lines = m3uContent.split('\n');
         let currentExtInf = null;
@@ -301,8 +355,8 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
 
         // Process Movies
         if (movies.length > 0) {
-            const movieInsertStmt = db.prepare(`INSERT OR IGNORE INTO movies (name, year, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?)`);
-            const movieRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_movie_relations (provider_id, movie_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
+            movieInsertStmt = db.prepare(`INSERT OR IGNORE INTO movies (name, year, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?)`);
+            movieRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_movie_relations (provider_id, movie_id, stream_id, container_extension, last_seen) VALUES (?, ?, ?, ?, ?)`);
             const existingMovies = await dbAll(db, 'SELECT id, provider_unique_id FROM movies WHERE provider_unique_id IS NOT NULL');
             const providerUniqueIdMap = new Map(existingMovies.map(m => [m.provider_unique_id, m.id]));
 
@@ -323,21 +377,36 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
                             resolve(this);
                         });
                     });
-                    movieId = result.lastID;
-                    providerUniqueIdMap.set(providerUniqueId, movieId);
+                    // INSERT OR IGNORE returns lastID=0/changes=0 when the row
+                    // was skipped because provider_unique_id already exists
+                    // (e.g. a concurrent refresh populated it after we loaded
+                    // the map). Look up the existing id so the relation row
+                    // doesn't reference a phantom movie_id=0 that the stale
+                    // cleanup will then orphan.
+                    if (result.changes === 0) {
+                        const existing = await dbGet(db, 'SELECT id FROM movies WHERE provider_unique_id = ?', [providerUniqueId]);
+                        movieId = existing ? existing.id : null;
+                    } else {
+                        movieId = result.lastID;
+                    }
+                    if (movieId) providerUniqueIdMap.set(providerUniqueId, movieId);
                 }
-                
+
+                if (!movieId) {
+                    console.warn(`[VOD Processor M3U] Could not resolve movieId for ${providerUniqueId}; skipping relation.`);
+                    continue;
+                }
                 const extension = url.split('.').pop() || 'mp4';
                 await new Promise((resolve, reject) => movieRelationInsertStmt.run(providerId, movieId, streamId, extension, scanStartTime, (err) => err ? reject(err) : resolve()));
             }
-            await new Promise(resolve => movieInsertStmt.finalize(resolve));
-            await new Promise(resolve => movieRelationInsertStmt.finalize(resolve));
+            await safeFinalize(movieInsertStmt, movieRelationInsertStmt);
+            movieInsertStmt = movieRelationInsertStmt = null;
         }
 
         // Process Series (basic info, not episodes from M3U)
         if (series.length > 0) {
-            const seriesInsertStmt = db.prepare(`INSERT OR IGNORE INTO series (name, year, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?)`);
-            const seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
+            seriesInsertStmt = db.prepare(`INSERT OR IGNORE INTO series (name, year, logo, category_name, provider_unique_id) VALUES (?, ?, ?, ?, ?)`);
+            seriesRelationInsertStmt = db.prepare(`INSERT OR REPLACE INTO provider_series_relations (provider_id, series_id, external_series_id, last_seen) VALUES (?, ?, ?, ?)`);
             const existingSeries = await dbAll(db, 'SELECT id, provider_unique_id FROM series WHERE provider_unique_id IS NOT NULL');
             const providerUniqueIdMap = new Map(existingSeries.map(s => [s.provider_unique_id, s.id]));
 
@@ -359,23 +428,34 @@ async function processM3uVod(db, dbGet, dbAll, dbRun, m3uContent, provider, send
                             resolve(this);
                         });
                     });
-                    seriesId = result.lastID;
-                    providerUniqueIdMap.set(providerUniqueId, seriesId);
+                    if (result.changes === 0) {
+                        const existing = await dbGet(db, 'SELECT id FROM series WHERE provider_unique_id = ?', [providerUniqueId]);
+                        seriesId = existing ? existing.id : null;
+                    } else {
+                        seriesId = result.lastID;
+                    }
+                    if (seriesId) providerUniqueIdMap.set(providerUniqueId, seriesId);
                 }
-                
+
+                if (!seriesId) {
+                    console.warn(`[VOD Processor M3U] Could not resolve seriesId for ${providerUniqueId}; skipping relation.`);
+                    continue;
+                }
                 await new Promise((resolve, reject) => seriesRelationInsertStmt.run(providerId, seriesId, externalSeriesId, scanStartTime, (err) => err ? reject(err) : resolve()));
             }
-            await new Promise(resolve => seriesInsertStmt.finalize(resolve));
-            await new Promise(resolve => seriesRelationInsertStmt.finalize(resolve));
+            await safeFinalize(seriesInsertStmt, seriesRelationInsertStmt);
+            seriesInsertStmt = seriesRelationInsertStmt = null;
         }
 
         await dbRun(db, "COMMIT");
         sendStatus(`Successfully processed VOD content from ${provider.name}.`, 'success');
 
     } catch (error) {
-        await dbRun(db, "ROLLBACK");
+        await safeRollback(dbRun, db, 'M3U VOD');
         console.error(`[VOD Processor M3U] Processing FAILED for ${provider.name}:`, error.message);
         sendStatus(`M3U VOD processing FAILED for ${provider.name}: ${error.message}`, 'error');
+    } finally {
+        await safeFinalize(movieInsertStmt, movieRelationInsertStmt, seriesInsertStmt, seriesRelationInsertStmt);
     }
 }
 

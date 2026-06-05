@@ -632,6 +632,12 @@ const renderGuide = (channelsToRender, resetScroll = false, shouldCenter = false
  * @param {Date} guideStartUtc - The start time of the current guide view in UTC.
  * @param {boolean} shouldScroll - If true, scrolls the timeline to the now line.
  */
+// Tracks the recursive setTimeout that re-runs updateNowLine every 60s. Each
+// renderGuide / "Now" button click / column resize used to spawn a NEW chain
+// without cancelling the previous one, so timers (and the per-tick DOM walk
+// inside updateNowLine) accumulated across the session.
+let nowLineTimer = null;
+
 const updateNowLine = (guideStartUtc, shouldScroll = false) => {
     const nowLineEl = document.getElementById('now-line');
     if (!nowLineEl) return;
@@ -681,7 +687,8 @@ const updateNowLine = (guideStartUtc, shouldScroll = false) => {
         }
     });
 
-    setTimeout(() => updateNowLine(guideStartUtc, false), 60000);
+    if (nowLineTimer) clearTimeout(nowLineTimer);
+    nowLineTimer = setTimeout(() => updateNowLine(guideStartUtc, false), 60000);
 };
 
 /**

@@ -77,10 +77,17 @@ COPY --from=builder /usr/src/app .
 # Expose the application port
 EXPOSE 8998
 
-# Create and declare volumes for persistent data
-RUN mkdir -p /data /dvr
+# SECURITY: create an unprivileged user and chown the app + volume mountpoints
+# so the Node process, ffmpeg, and the SQLite writer don't run as root. An
+# exploit in the URL-fetching code (image proxy / EPG ingestion) now lands
+# as 'app' instead of root, and root-owned files no longer leak onto the host.
+RUN groupadd --system app && \
+    useradd --system --no-create-home --gid app --shell /usr/sbin/nologin app && \
+    mkdir -p /data /dvr && \
+    chown -R app:app /usr/src/app /data /dvr
 VOLUME /data
 VOLUME /dvr
+USER app
 
 # Define the command to run your application
 CMD [ "npm", "start" ]

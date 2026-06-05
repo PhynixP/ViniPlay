@@ -41,16 +41,20 @@ class XtreamClient {
                 action: action,
                 ...params
             };
-            
+
             console.log(`[XC Client] Requesting action: ${action}`);
             const response = await this.client.get(url, { params: allParams });
-            
+
             if (!response.data) {
                 throw new Error('Empty response from provider');
             }
             return response.data;
         } catch (error) {
-            const msg = `[XC Client] Error in action '${action}': ${error.message}`;
+            // SECURITY: axios includes the request URL (with query string) in
+            // error.message on failure, which means username=X&password=Y can
+            // leak into logs and (via sendStatus) into the browser. Scrub.
+            const scrubbed = String(error.message || '').replace(/(username|password)=[^&\s"']*/gi, '$1=__REDACTED__');
+            const msg = `[XC Client] Error in action '${action}': ${scrubbed}`;
             console.error(msg);
             throw new Error(msg);
         }

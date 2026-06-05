@@ -342,10 +342,15 @@ function renderStorageBar(storageData) {
 }
 
 const toISOStringLocal = (localDateTimeString) => new Date(localDateTimeString).toISOString();
+// Convert a UTC ISO string to a datetime-local value (YYYY-MM-DDTHH:MM in the
+// user's local timezone). The previous implementation used setMinutes(local -
+// offset), which produces a 30/45-minute skew in half-hour offsets (IST UTC+5:30,
+// Nepal UTC+5:45) because setMinutes overflows on values >= 60 instead of
+// applying as a delta. Shift the underlying epoch by the offset and read back
+// via toISOString — works for whole-hour AND half-hour zones.
 const fromISOStringToLocalDateTime = (isoString) => {
     const date = new Date(isoString);
-    date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
-    return date.toISOString().slice(0, 16);
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 };
 
 /**

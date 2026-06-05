@@ -7,7 +7,7 @@
 import { appState, guideState, UIElements } from './state.js';
 import { apiFetch, saveGlobalSetting, saveUserSetting, fetchAppVersion } from './api.js';
 // MODIFIED: Import isProcessingRunning for the button logic
-import { showNotification, openModal, closeModal, showConfirm, setButtonLoadingState, showProcessingModal, isProcessingRunning } from './ui.js';
+import { showNotification, openModal, closeModal, showConfirm, setButtonLoadingState, showProcessingModal, updateProcessingStatus, isProcessingRunning } from './ui.js';
 import { handleGuideLoad } from './guide.js';
 import { navigate } from './ui.js';
 import { ICONS } from './icons.js';
@@ -993,71 +993,15 @@ const openSourceEditor = (sourceType, source = null) => {
         }
     }
 
-    // Attach listener for the new button
-    const filterGroupsBtn = document.getElementById('source-editor-filter-groups-btn');
-    if (filterGroupsBtn) {
-        filterGroupsBtn.addEventListener('click', async () => {
-            const selectedGroupsInput = document.getElementById('source-editor-selected-groups');
-            const currentSelected = JSON.parse(selectedGroupsInput.value || '[]');
-            const sourceName = UIElements.sourceEditorName.value || 'Source';
-
-            // Initial UI state
-            const originalText = filterGroupsBtn.querySelector('span').textContent;
-            filterGroupsBtn.querySelector('span').textContent = 'Loading...';
-            filterGroupsBtn.disabled = true;
-
-            currentGroupEditorContext = 'source-editor';
-            currentGroupSourceId = null; // Not needed for source editor as we read from form
-
-            try {
-                const payload = {
-                    type: currentSourceTypeForEditor, // Use 'type' not 'sourceType'
-                };
-
-                if (currentSourceTypeForEditor === 'url') {
-                    payload.url = UIElements.sourceEditorUrl.value;
-                } else if (currentSourceTypeForEditor === 'xc') {
-                    payload.xc = JSON.stringify({
-                        server: UIElements.sourceEditorXcUrl.value,
-                        username: UIElements.sourceEditorXcUsername.value,
-                        password: UIElements.sourceEditorXcPassword.value,
-                    });
-                }
-                // File sources: fetch-groups only works if file is already on server (has ID or path knewn)
-                if (source && source.id) {
-                    payload.sourceId = source.id;
-                    if (currentSourceTypeForEditor === 'file' && source.path) {
-                        payload.url = source.path; // Server expects path in 'url' field for file type
-                    }
-                }
-
-                const res = await apiFetch('/api/sources/fetch-groups', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (res && res.ok) {
-                    const data = await res.json();
-                    let allGroups = [];
-                    if (Array.isArray(data)) allGroups = data;
-                    else if (data.groups) allGroups = data.groups;
-
-                    UIElements.groupFilterModal.querySelector('h3').textContent = `Select Groups for ${sourceName}`;
-                    populateGroupFilterModal(allGroups, currentSelected);
-                    openModal(UIElements.groupFilterModal);
-                } else {
-                    showNotification("Failed to fetch groups. Ensure URL/Source is valid.", true);
-                }
-            } catch (e) {
-                console.error("Group fetch error:", e);
-                showNotification("Error fetching groups: " + e.message, true);
-            } finally {
-                filterGroupsBtn.querySelector('span').textContent = originalText;
-                filterGroupsBtn.disabled = false;
-            }
-        });
-    }
+    // NOTE: The click handler for #source-editor-filter-groups-btn is attached
+    // ONCE via delegation in setupSettingsEventListeners (on the source editor
+    // modal). Previously a second direct listener was attached here every time
+    // openSourceEditor ran, so every click fired both handlers — two parallel
+    // /api/sources/fetch-groups POSTs and a race on the modal's content.
+    // The state set here is the only thing the delegated handler needs from
+    // this scope; the rest of the fetch flow lives in the delegated listener.
+    currentGroupEditorContext = 'source-editor';
+    currentGroupSourceId = null;
 
     // Hide refresh interval for file-based sources
     UIElements.sourceEditorRefreshContainer.classList.toggle('hidden', activeTab === 'file');
