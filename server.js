@@ -88,8 +88,16 @@ try {
     } else {
         console.log('[Push] VAPID keys not found. Generating new keys...');
         vapidKeys = webpush.generateVAPIDKeys();
-        fs.writeFileSync(VAPID_KEYS_PATH, JSON.stringify(vapidKeys, null, 2));
+        // SECURITY: write the VAPID private key with 0600 so other users on a
+        // multi-tenant host can't read it and forge push notifications.
+        atomicWriteFileSync(VAPID_KEYS_PATH, JSON.stringify(vapidKeys, null, 2), { mode: 0o600 });
         console.log('[Push] New VAPID keys generated and saved.');
+    }
+    // Tighten perms on an existing file written by an older version.
+    try {
+        if (fs.existsSync(VAPID_KEYS_PATH)) fs.chmodSync(VAPID_KEYS_PATH, 0o600);
+    } catch (chmodErr) {
+        console.warn('[Push] Could not chmod VAPID keys file:', chmodErr.message);
     }
     const vapidContactEmail = process.env.VAPID_CONTACT_EMAIL || 'mailto:admin@example.com';
     console.log(`[Push] Setting VAPID contact to: ${vapidContactEmail}`);
@@ -299,52 +307,81 @@ const updateAndScheduleSourceRefreshes = () => {
     console.log('[SCHEDULER] Updating and scheduling all source refreshes...');
     const settings = getSettings();
     const allSources = [...(settings.m3uSources || []), ...(settings.epgSources || [])];
-    const activeUrlSources = new Set();
+
+    // Clear EVERY existing timer up front. The previous code only cleared the
+    // timer for sources that survived into the new active set, leaving a
+    // dangling pre-existing setTimeout chain — and since scheduleNext re-armed
+    // itself recursively, that orphan chain kept spawning new timers on every
+    // tick. Each settings save accumulated another parallel timer per source,
+    // amplifying any refresh-tick load and ignoring refresh-hour edits.
+    for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
+        clearTimeout(timeoutId);
+        sourceRefreshTimers.delete(sourceId);
+    }
 
     allSources.forEach(source => {
         if (source.type === 'url' && source.isActive && source.refreshHours > 0) {
-            activeUrlSources.add(source.id);
-            if (sourceRefreshTimers.has(source.id)) {
-                clearTimeout(sourceRefreshTimers.get(source.id));
-            }
-
             console.log(`[SCHEDULER] Scheduling refresh for "${source.name}" (ID: ${source.id}) every ${source.refreshHours} hours.`);
 
+            const sourceId = source.id;
             const scheduleNext = () => {
+                // Re-read the source from current settings on each tick so a
+                // refreshHours change (or a delete) takes effect immediately
+                // rather than being shadowed by the closure's captured value.
+                const currentSettings = getSettings();
+                const all = [...(currentSettings.m3uSources || []), ...(currentSettings.epgSources || [])];
+                const current = all.find(s => s.id === sourceId);
+                if (!current || current.type !== 'url' || !current.isActive || !(current.refreshHours > 0)) {
+                    console.log(`[SCHEDULER] Source ${sourceId} no longer eligible for auto-refresh; stopping chain.`);
+                    sourceRefreshTimers.delete(sourceId);
+                    return;
+                }
                 const timeoutId = setTimeout(async () => {
-                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${source.name}".`);
+                    console.log(`[SCHEDULER_RUN] Auto-refresh triggered for "${current.name}".`);
                     try {
                         const result = await processAndMergeSources();
                         if (result.success) {
-                            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
-                            console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${source.name}".`);
+                            atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+                            console.log(`[SCHEDULER_RUN] Successfully refreshed and processed sources for "${current.name}".`);
                         }
                     } catch (error) {
-                        console.error(`[SCHEDULER_RUN] Auto-refresh for "${source.name}" failed:`, error.message);
+                        console.error(`[SCHEDULER_RUN] Auto-refresh for "${current.name}" failed:`, error.message);
                     }
                     scheduleNext();
-                }, source.refreshHours * 3600 * 1000);
+                }, current.refreshHours * 3600 * 1000);
 
-                sourceRefreshTimers.set(source.id, timeoutId);
+                sourceRefreshTimers.set(sourceId, timeoutId);
             };
 
             scheduleNext();
         }
     });
 
-    for (const [sourceId, timeoutId] of sourceRefreshTimers.entries()) {
-        if (!activeUrlSources.has(sourceId)) {
-            console.log(`[SCHEDULER] Clearing obsolete refresh timer for source ID: ${sourceId}`);
-            clearTimeout(timeoutId);
-            sourceRefreshTimers.delete(sourceId);
-        }
-    }
     console.log(`[SCHEDULER] Finished scheduling. Active timers: ${sourceRefreshTimers.size}`);
 };
 
+// SECURITY/DURABILITY: atomic JSON write. Naive fs.writeFileSync truncates
+// the target to 0 bytes before writing — if the process is killed (OOM,
+// SIGKILL, container restart) between truncate and final write, the file is
+// left empty/partial and the next JSON.parse fails. Write to a tempfile,
+// fsync, then atomically rename. Optional `mode` lets callers harden file
+// perms (e.g. 0o600 for VAPID private keys).
+function atomicWriteFileSync(filePath, data, options = {}) {
+    const dir = path.dirname(filePath);
+    const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+    const fd = fs.openSync(tmpPath, 'w', options.mode);
+    try {
+        fs.writeSync(fd, data);
+        fs.fsyncSync(fd);
+    } finally {
+        fs.closeSync(fd);
+    }
+    fs.renameSync(tmpPath, filePath);
+}
+
 function saveSettings(settings) {
     try {
-        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+        atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
         console.log('[SETTINGS] Settings saved successfully.');
         updateAndScheduleSourceRefreshes();
     } catch (e) {
@@ -643,12 +680,39 @@ function cleanupInactiveStreams() {
     });
 }
 
+// Helper: write to an SSE client and swallow write errors. A res.write to a
+// half-closed socket can throw synchronously (ERR_STREAM_WRITE_AFTER_END),
+// which without this guard aborts the entire .forEach broadcast loop and
+// silently drops the event for every subsequent client. On error we mark the
+// client dead so the caller's outer cleanup can prune it.
+function _safeSseWrite(client, message) {
+    try {
+        client.res.write(message);
+        return true;
+    } catch (err) {
+        console.warn(`[SSE] Failed to write to client (will be dropped): ${err.message}`);
+        client._dead = true;
+        return false;
+    }
+}
+
+// Removes any clients marked dead during a broadcast iteration. Iterating a
+// snapshot of the array means we never modify it mid-loop.
+function _pruneDeadSseClients(userId) {
+    const clients = sseClients.get(userId);
+    if (!clients) return;
+    const alive = clients.filter(c => !c._dead);
+    if (alive.length === 0) sseClients.delete(userId);
+    else if (alive.length !== clients.length) sseClients.set(userId, alive);
+}
+
 function sendSseEvent(userId, eventName, data) {
     const clients = sseClients.get(userId);
     if (clients && clients.length > 0) {
         console.log(`[SSE] Sending event '${eventName}' to ${clients.length} client(s) for user ID ${userId}.`);
         const message = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
-        clients.forEach(client => client.res.write(message));
+        clients.slice().forEach(client => _safeSseWrite(client, message));
+        _pruneDeadSseClients(userId);
     }
 }
 
@@ -682,13 +746,12 @@ function broadcastAdminUpdate() {
 
     const combinedLiveActivity = [...transcodedLive, ...redirectLive];
 
-    for (const clients of sseClients.values()) {
-        clients.forEach(client => {
-            if (client.isAdmin) {
-                const message = `event: activity-update\ndata: ${JSON.stringify({ live: combinedLiveActivity })}\n\n`;
-                client.res.write(message);
-            }
+    const message = `event: activity-update\ndata: ${JSON.stringify({ live: combinedLiveActivity })}\n\n`;
+    for (const [userId, clients] of sseClients.entries()) {
+        clients.slice().forEach(client => {
+            if (client.isAdmin) _safeSseWrite(client, message);
         });
+        _pruneDeadSseClients(userId);
     }
     console.log(`[SSE_ADMIN] Broadcasted combined activity update (${combinedLiveActivity.length} live streams) to all connected admins.`);
 }
@@ -697,11 +760,11 @@ function broadcastAdminUpdate() {
 function broadcastSseToAll(eventName, data) {
     const message = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
     let clientCount = 0;
-    for (const clients of sseClients.values()) {
-        clients.forEach(client => {
-            client.res.write(message);
-            clientCount++;
+    for (const [userId, clients] of sseClients.entries()) {
+        clients.slice().forEach(client => {
+            if (_safeSseWrite(client, message)) clientCount++;
         });
+        _pruneDeadSseClients(userId);
     }
     console.log(`[SSE_BROADCAST] Broadcasted event '${eventName}' to ${clientCount} total clients.`);
 }
@@ -769,7 +832,7 @@ function getSettings() {
 
     if (!fs.existsSync(SETTINGS_PATH)) {
         console.log('[SETTINGS] settings.json not found, creating default settings.');
-        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(defaultSettings, null, 2));
+        atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(defaultSettings, null, 2));
         return defaultSettings;
     }
     try {
@@ -917,7 +980,7 @@ function getSettings() {
                 console.log('[SETTINGS_MIGRATE] Settings are all valid.');
                 if (needsSave) {
                     console.log('[SETTINGS_MIGRATE] Saving updated settings file after migration.');
-                    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+                    atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
                 }
             } else {
                 console.log('[SETTINGS_MIGRATE_ERROR] Settings are not all valid.');
@@ -1311,7 +1374,27 @@ const parseEpgTime = (timeStr, offsetHours = 0) => {
     return date;
 };
 
+// Single-flight guard for processAndMergeSources. The scheduler tick, the
+// manual POST /api/process-sources, and the startup refresh can all invoke
+// this; before this guard, concurrent runs raced on the LIVE_CHANNELS_M3U_PATH
+// and LIVE_EPG_JSON_PATH writes (producing torn output) and on the settings
+// in-memory mutation. Now: a second caller arriving while a run is in flight
+// awaits the same Promise instead of starting its own pass.
+let _processAndMergeInFlight = null;
+
 async function processAndMergeSources(req) {
+    if (_processAndMergeInFlight) {
+        console.log('[PROCESS] A process-and-merge run is already in flight; awaiting it instead of starting a new one.');
+        sendProcessingStatus(req, 'Another processing run is already active; waiting for it to finish.', 'info');
+        return _processAndMergeInFlight;
+    }
+    _processAndMergeInFlight = _processAndMergeSourcesImpl(req).finally(() => {
+        _processAndMergeInFlight = null;
+    });
+    return _processAndMergeInFlight;
+}
+
+async function _processAndMergeSourcesImpl(req) {
     console.log('[PROCESS] Starting to process and merge all active sources.');
     sendProcessingStatus(req, 'Starting to process sources...', 'info');
     const settings = getSettings();
@@ -1562,7 +1645,7 @@ async function processAndMergeSources(req) {
 
     // --- Save the new separated files ---
     try { // Try block for saving LIVE M3U
-        fs.writeFileSync(LIVE_CHANNELS_M3U_PATH, mergedLiveM3uContent);
+        atomicWriteFileSync(LIVE_CHANNELS_M3U_PATH, mergedLiveM3uContent);
         console.log(`[M3U] Merged LIVE CHANNELS content saved to ${LIVE_CHANNELS_M3U_PATH}.`);
         sendProcessingStatus(req, `Successfully merged all live channels.`, 'success');
     } catch (writeErr) { // Catch block for saving LIVE M3U
@@ -1697,7 +1780,7 @@ async function processAndMergeSources(req) {
         mergedProgramData[channelId].sort((a, b) => new Date(a.start) - new Date(b.start));
     }
     try { // Try block for saving EPG JSON
-        fs.writeFileSync(LIVE_EPG_JSON_PATH, JSON.stringify(mergedProgramData));
+        atomicWriteFileSync(LIVE_EPG_JSON_PATH, JSON.stringify(mergedProgramData));
         console.log(`[EPG] Merged EPG JSON content saved to ${LIVE_EPG_JSON_PATH}.`);
         sendProcessingStatus(req, `Successfully merged all EPG data for live channels.`, 'success');
     } catch (writeErr) { // Catch block for saving EPG JSON
@@ -3101,7 +3184,7 @@ app.post('/api/process-sources', requireAuth, async (req, res) => {
         const result = await processAndMergeSources(req); // <-- MODIFIED: Pass req
 
         if (result.success) {
-            fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+            atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
             console.log('[API] Source processing completed and settings saved (manual trigger).');
             res.json({ success: true, message: 'Sources merged successfully.' });
         } else {
@@ -3138,7 +3221,7 @@ app.post('/api/save/settings', requireAuth, async (req, res) => {
             console.log("[API] Timezone setting changed, re-processing sources.");
             const result = await processAndMergeSources();
             if (result.success) {
-                fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+                atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
             }
         }
 
@@ -3377,7 +3460,14 @@ app.delete('/api/data', requireAuth, requireAdmin, (req, res) => {
         if (notificationCheckInterval) clearInterval(notificationCheckInterval);
         for (const timer of sourceRefreshTimers.values()) clearTimeout(timer);
         sourceRefreshTimers.clear();
-        for (const job of activeDvrJobs.values()) job.cancel();
+        for (const entry of activeDvrJobs.values()) {
+            if (entry && typeof entry === 'object' && 'startJob' in entry) {
+                try { entry.startJob?.cancel(); } catch (_) {}
+                try { entry.endJob?.cancel(); } catch (_) {}
+            } else if (entry && typeof entry.cancel === 'function') {
+                try { entry.cancel(); } catch (_) {}
+            }
+        }
         activeDvrJobs.clear();
         for (const { process: ffmpegProcess } of activeStreamProcesses.values()) {
             try { ffmpegProcess.kill('SIGKILL'); } catch (e) { }
@@ -3630,13 +3720,26 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
         console.log(`[STREAM] Existing stream requested. Key: ${streamKey}. New ref count: ${activeStreamInfo.references}.`);
         activeStreamInfo.process.stdout.pipe(res);
 
-        req.on('close', () => {
-            console.log(`[STREAM] Client closed connection for existing stream ${streamKey}. Decrementing ref count.`);
+        // Once-only decrement that fires on EITHER side of the connection
+        // dying. Previously only req.on('close') was wired, so a response-side
+        // pipe error left references>0 forever and the janitor never reaped
+        // the underlying ffmpeg process.
+        let refDecrementedExisting = false;
+        const decrementExisting = (reason) => {
+            if (refDecrementedExisting) return;
+            refDecrementedExisting = true;
+            console.log(`[STREAM] Client disconnect (${reason}) for existing stream ${streamKey}. Decrementing ref count.`);
             activeStreamInfo.references--;
             activeStreamInfo.lastAccess = Date.now();
             if (activeStreamInfo.references <= 0) {
                 console.log(`[STREAM] Last client disconnected. Ref count is 0. Process for PID: ${activeStreamInfo.process.pid} will be cleaned up by the janitor.`);
             }
+        };
+        req.on('close', () => decrementExisting('req close'));
+        res.on('close', () => decrementExisting('res close'));
+        res.on('error', (err) => {
+            console.warn(`[STREAM] Response stream error for existing ${streamKey}: ${err.message}`);
+            decrementExisting('res error');
         });
         return;
     }
@@ -3761,18 +3864,30 @@ app.get('/stream', allowLocalOrAuth, async (req, res) => {
         if (!res.headersSent) res.status(500).send('Failed to start streaming service. Check server logs.');
     });
 
-    req.on('close', () => {
+    // Once-only ref-counter decrement covering req close, res close, and res
+    // error. Without this, a response-side pipe failure could leave
+    // references>0 forever and the janitor would never reap the ffmpeg.
+    let refDecremented = false;
+    const decrementRef = (reason) => {
+        if (refDecremented) return;
+        refDecremented = true;
         const info = activeStreamProcesses.get(streamKey);
         if (info) {
-            console.log(`[STREAM] Client closed connection for new stream ${streamKey}. Decrementing ref count.`);
+            console.log(`[STREAM] Client disconnect (${reason}) for new stream ${streamKey}. Decrementing ref count.`);
             info.references--;
             info.lastAccess = Date.now();
             if (info.references <= 0) {
                 console.log(`[STREAM] Last client disconnected. Ref count is 0. Process for PID: ${info.process.pid} will be cleaned up by the janitor.`);
             }
         } else {
-            console.log(`[STREAM] Client closed connection for ${streamKey}, but no process was found in the map.`);
+            console.log(`[STREAM] Client disconnect (${reason}) for ${streamKey}, but no process was found in the map.`);
         }
+    };
+    req.on('close', () => decrementRef('req close'));
+    res.on('close', () => decrementRef('res close'));
+    res.on('error', (err) => {
+        console.warn(`[STREAM] Response stream error for ${streamKey}: ${err.message}`);
+        decrementRef('res error');
     });
 });
 
@@ -4532,11 +4647,13 @@ async function startRecording(job) {
                         }
                     }
                 );
-                db.run("UPDATE dvr_jobs SET status = 'completed', ffmpeg_pid = NULL WHERE id = ?", [job.id]);
+                // Don't overwrite an explicit 'cancelled' status — the user
+                // hit Delete on the active job and we already SIGINT'd ffmpeg.
+                db.run("UPDATE dvr_jobs SET status = 'completed', ffmpeg_pid = NULL WHERE id = ? AND status != 'cancelled'", [job.id]);
             } else {
                 const finalErrorMessage = `Recording failed. FFmpeg exit code: ${code}. ${statErr ? 'File stat error: ' + statErr.message : ''}. FFmpeg output: ${ffmpegErrorOutput.slice(-1000)}`;
                 console.error(`[DVR] Recording for job ${job.id} failed. ${finalErrorMessage}`);
-                db.run("UPDATE dvr_jobs SET status = 'error', ffmpeg_pid = NULL, errorMessage = ? WHERE id = ?", [finalErrorMessage, job.id]);
+                db.run("UPDATE dvr_jobs SET status = 'error', ffmpeg_pid = NULL, errorMessage = ? WHERE id = ? AND status != 'cancelled'", [finalErrorMessage, job.id]);
                 if (!statErr && stats.size <= 1024) {
                     fs.unlink(fullFilePath, (unlinkErr) => {
                         if (unlinkErr) console.error(`[DVR] Could not delete failed recording file: ${fullFilePath}`, unlinkErr);
@@ -4554,11 +4671,25 @@ async function startRecording(job) {
     });
 }
 
-function scheduleDvrJob(job) {
-    if (activeDvrJobs.has(job.id)) {
-        activeDvrJobs.get(job.id)?.cancel();
-        activeDvrJobs.delete(job.id);
+// Cancels both the start and end schedules for a DVR job. Previously only
+// the start schedule was tracked in activeDvrJobs — the end schedule leaked,
+// firing at the original endTime even after the job had been deleted or
+// rescheduled. That phantom firing could SIGINT a different recording if the
+// job ID was reused (e.g. after a DELETE FROM dvr_jobs).
+function cancelDvrJobSchedules(jobId) {
+    const entry = activeDvrJobs.get(jobId);
+    if (!entry) return;
+    if (entry && typeof entry === 'object' && 'startJob' in entry) {
+        try { entry.startJob?.cancel(); } catch (_) {}
+        try { entry.endJob?.cancel(); } catch (_) {}
+    } else if (entry && typeof entry.cancel === 'function') {
+        try { entry.cancel(); } catch (_) {} // legacy shape
     }
+    activeDvrJobs.delete(jobId);
+}
+
+function scheduleDvrJob(job) {
+    cancelDvrJobSchedules(job.id);
 
     const startTime = new Date(job.startTime);
     const endTime = new Date(job.endTime);
@@ -4572,16 +4703,18 @@ function scheduleDvrJob(job) {
         return;
     }
 
+    let startJob = null;
     if (startTime > now) {
-        const startJob = schedule.scheduleJob(startTime, () => startRecording(job));
-        activeDvrJobs.set(job.id, startJob);
+        startJob = schedule.scheduleJob(startTime, () => startRecording(job));
         console.log(`[DVR] Scheduled recording start for job ${job.id} at ${startTime}`);
     } else {
         startRecording(job);
     }
 
-    schedule.scheduleJob(endTime, () => stopRecording(job.id));
+    const endJob = schedule.scheduleJob(endTime, () => stopRecording(job.id));
     console.log(`[DVR] Scheduled recording stop for job ${job.id} at ${endTime}`);
+
+    activeDvrJobs.set(job.id, { startJob, endJob });
 }
 
 
@@ -4837,14 +4970,17 @@ app.delete('/api/dvr/jobs/all', requireAuth, requireDvrAccess, (req, res) => {
     const userId = req.session.userId;
     console.log(`[DVR_API] Clearing all scheduled/historical jobs for user ${userId}.`);
 
-    db.all("SELECT id FROM dvr_jobs WHERE user_id = ? AND status = 'scheduled'", [userId], (err, scheduledJobs) => {
+    // Pick up currently-recording jobs too. Previously only 'scheduled' jobs
+    // were considered, so bulk-delete left ffmpeg running and the close
+    // handler later wrote dvr_recordings rows pointing at deleted dvr_jobs.
+    db.all("SELECT id, status FROM dvr_jobs WHERE user_id = ? AND status IN ('scheduled','recording')", [userId], (err, jobs) => {
         if (err) {
             return res.status(500).json({ error: 'Could not fetch jobs to cancel.' });
         }
-        scheduledJobs.forEach(job => {
-            if (activeDvrJobs.has(job.id)) {
-                activeDvrJobs.get(job.id)?.cancel();
-                activeDvrJobs.delete(job.id);
+        jobs.forEach(job => {
+            cancelDvrJobSchedules(job.id);
+            if (job.status === 'recording') {
+                stopRecording(job.id);
             }
         });
 
@@ -4887,10 +5023,17 @@ app.delete('/api/dvr/recordings/all', requireAuth, requireDvrAccess, (req, res) 
 app.delete('/api/dvr/jobs/:id', requireAuth, requireDvrAccess, (req, res) => {
     const { id } = req.params;
     const jobId = parseInt(id, 10);
-    if (activeDvrJobs.has(jobId)) {
-        activeDvrJobs.get(jobId)?.cancel();
-        activeDvrJobs.delete(jobId);
+    cancelDvrJobSchedules(jobId);
+
+    // If the recording is in progress, send SIGINT to ffmpeg. Previously we
+    // only marked status='cancelled' and ffmpeg's close handler then
+    // overwrote it back to 'completed', so the user's cancel silently failed
+    // and a recording they had cancelled appeared in the recordings list.
+    if (runningFFmpegProcesses.has(jobId)) {
+        console.log(`[DVR_API] Job ${jobId} is currently recording; stopping ffmpeg before cancel.`);
+        stopRecording(jobId);
     }
+
     // MODIFIED: Admin can cancel any job, user can only cancel their own.
     const query = req.session.isAdmin ? "UPDATE dvr_jobs SET status = 'cancelled' WHERE id = ?" : "UPDATE dvr_jobs SET status = 'cancelled' WHERE id = ? AND user_id = ?";
     const params = req.session.isAdmin ? [jobId] : [jobId, req.session.userId];
@@ -5219,7 +5362,19 @@ app.post('/api/settings/import', requireAdmin, settingsUpload.single('settingsFi
     const tempPath = path.join(DATA_DIR, 'settings.tmp.json');
     try {
         const fileContent = fs.readFileSync(tempPath, 'utf-8');
-        JSON.parse(fileContent); // Validate that it's valid JSON
+        const parsed = JSON.parse(fileContent);
+        // Validate shape — previously any valid JSON ({}, null, [], 42) would
+        // pass and clobber settings.json, wiping every M3U/EPG source, user
+        // agent and stream profile because getSettings() would fall back to
+        // defaults and the next save would persist them.
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Settings file must contain a JSON object.');
+        }
+        const required = ['m3uSources', 'epgSources', 'userAgents', 'streamProfiles'];
+        const missing = required.filter(k => !Array.isArray(parsed[k]));
+        if (missing.length > 0) {
+            throw new Error(`Missing or invalid required field(s): ${missing.join(', ')}.`);
+        }
         fs.renameSync(tempPath, SETTINGS_PATH);
         console.log('[SETTINGS_IMPORT] Settings file imported successfully. App will now use new settings.');
         res.json({ success: true, message: 'Settings imported. The application will use them on next load.' });
@@ -5371,7 +5526,7 @@ detectHardwareAcceleration().then(() => {
 
         processAndMergeSources().then((result) => {
             console.log('[INIT] Initial source processing complete.');
-            if (result.success) fs.writeFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
+            if (result.success) atomicWriteFileSync(SETTINGS_PATH, JSON.stringify(result.updatedSettings, null, 2));
             updateAndScheduleSourceRefreshes();
         }).catch(error => console.error('[INIT] Initial source processing failed:', error.message));
 
