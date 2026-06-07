@@ -1143,6 +1143,12 @@ function writeToLogFile(message) {
         if (!currentLogStream) {
             const logPath = getCurrentLogFilePath();
             currentLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+            currentLogStream.on('error', () => {
+                // Do not let an unwritable log bind-mount crash the whole app.
+                // Console output still goes to Docker logs, and the next log
+                // attempt may recreate the stream after permissions are fixed.
+                currentLogStream = null;
+            });
 
             // Get current file size if file exists
             if (fs.existsSync(logPath)) {
