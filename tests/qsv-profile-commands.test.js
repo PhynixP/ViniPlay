@@ -29,14 +29,21 @@ function assertModernQsvCommand(command, profileId) {
   );
 
   assert(
-    command.includes('-global_quality 23'),
+    /-global_quality 2[34]/.test(command),
     `${profileId} should set an explicit QSV quality mode instead of relying on FFmpeg's CQP default warning`
   );
 
   assert(
-    command.includes('-vf vpp_qsv=format=nv12'),
+    command.includes('vpp_qsv') && command.includes('format=nv12'),
     `${profileId} should normalize QSV hardware frames to NV12 so HEVC/Dolby Vision sources can feed h264_qsv`
   );
+
+  if (profileId.includes('ffmpeg-intel') || profileId.includes('cast-intel')) {
+    assert(
+      command.includes('w=1920:h=1080') && command.includes('-level:v 4.2') && command.includes('-bf 0'),
+      `${profileId} should produce a browser-safe 1080p H.264 level 4.2 stream without B-frames for mpegts.js/MSE playback`
+    );
+  }
 }
 
 for (const profileId of ['ffmpeg-intel', 'cast-intel', 'dvr-mp4-intel']) {
