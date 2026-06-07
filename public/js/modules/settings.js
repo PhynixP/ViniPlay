@@ -84,15 +84,15 @@ async function addDefaultGpuProfiles(hardware) {
     // Intel QSV Profiles
     if (hardware.intel_qsv) {
         if (!streamProfiles.some(p => p.id === 'ffmpeg-intel')) {
-            streamProfiles.push({ id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -global_quality 23 -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
+            streamProfiles.push({ id: 'ffmpeg-intel', name: 'ffmpeg (Intel QSV)', command: '-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -vf vpp_qsv=format=nv12 -c:v h264_qsv -preset medium -global_quality 23 -c:a aac -b:a 128k -f mpegts pipe:1', isDefault: false });
             changesMade = true;
         }
         if (!dvrProfiles.some(p => p.id === 'dvr-mp4-intel')) {
-            dvrProfiles.push({ id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -global_quality 23 -vf scale_qsv=format=nv12 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
+            dvrProfiles.push({ id: 'dvr-mp4-intel', name: 'Intel QSV MP4 (H.264/AAC)', command: '-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -vf vpp_qsv=format=nv12 -c:v h264_qsv -preset medium -global_quality 23 -c:a aac -ac 2 -b:a 128k -movflags +faststart -f mp4 "{filePath}"', isDefault: false });
             changesMade = true;
         }
         if (!castProfiles.some(p => p.id === 'cast-intel')) {
-            castProfiles.push({ id: 'cast-intel', name: 'Cast (Intel QSV)', command: '-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -c:v h264_qsv -preset medium -global_quality 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false });
+            castProfiles.push({ id: 'cast-intel', name: 'Cast (Intel QSV)', command: '-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}" -vf vpp_qsv=format=nv12 -c:v h264_qsv -preset medium -global_quality 23 -c:a aac -b:a 128k -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1', isDefault: false });
             changesMade = true;
         }
     }

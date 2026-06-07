@@ -32,6 +32,11 @@ function assertModernQsvCommand(command, profileId) {
     command.includes('-global_quality 23'),
     `${profileId} should set an explicit QSV quality mode instead of relying on FFmpeg's CQP default warning`
   );
+
+  assert(
+    command.includes('-vf vpp_qsv=format=nv12'),
+    `${profileId} should normalize QSV hardware frames to NV12 so HEVC/Dolby Vision sources can feed h264_qsv`
+  );
 }
 
 for (const profileId of ['ffmpeg-intel', 'cast-intel', 'dvr-mp4-intel']) {
