@@ -19,13 +19,23 @@ function assertModernQsvCommand(command, profileId) {
   );
 
   assert(
-    command.includes('-hwaccel_output_format qsv'),
-    `${profileId} should explicitly request QSV hardware frames instead of relying on deprecated FFmpeg defaults`
+    command.includes('-reconnect 1') && command.includes('-reconnect_streamed 1') && command.includes('-reconnect_delay_max'),
+    `${profileId} should include reconnect flags to survive brief upstream stream interruptions`
   );
 
   assert(
-    !command.includes('-c:v h264_qsv -i'),
-    `${profileId} should not force h264_qsv as the input decoder before -i; input codec probing must remain automatic`
+    !command.includes('-hwaccel_output_format qsv'),
+    `${profileId} should not force QSV hardware decode output — CPU decode + QSV encode is required for all-codec compatibility`
+  );
+
+  assert(
+    command.includes('hwupload=extra_hw_frames=64') && command.includes('format=nv12'),
+    `${profileId} should upload software frames to QSV memory via hwupload so all input codecs work with h264_qsv encoder`
+  );
+
+  assert(
+    command.includes('-c:v h264_qsv'),
+    `${profileId} should use h264_qsv for GPU-accelerated encoding`
   );
 
   assert(
@@ -33,15 +43,10 @@ function assertModernQsvCommand(command, profileId) {
     `${profileId} should set an explicit QSV quality mode instead of relying on FFmpeg's CQP default warning`
   );
 
-  assert(
-    command.includes('vpp_qsv') && command.includes('format=nv12'),
-    `${profileId} should normalize QSV hardware frames to NV12 so HEVC/Dolby Vision sources can feed h264_qsv`
-  );
-
   if (profileId.includes('ffmpeg-intel') || profileId.includes('cast-intel')) {
     assert(
-      command.includes('w=1920:h=1080') && command.includes('-level:v 4.2') && command.includes('-bf 0'),
-      `${profileId} should produce a browser-safe 1080p H.264 level 4.2 stream without B-frames for mpegts.js/MSE playback`
+      command.includes('-level:v 4.2') && command.includes('-bf 0'),
+      `${profileId} should produce a browser-safe H.264 level 4.2 stream without B-frames for mpegts.js/MSE playback`
     );
   }
 }
@@ -51,15 +56,14 @@ for (const profileId of ['ffmpeg-intel', 'cast-intel', 'dvr-mp4-intel']) {
   assertModernQsvCommand(extractProfileCommand(settingsJs, profileId), `hardware-detected ${profileId}`);
 }
 
-assert(
-  settingsJs.includes('-user_agent "{userAgent}" -hwaccel qsv -hwaccel_output_format qsv -i "{streamUrl}"'),
-  'settings UI hardware-detected Intel QSV examples should show the modern command template'
-);
+// dvr-ts-intel only exists in server.js (server-side built-in)
+assertModernQsvCommand(extractProfileCommand(serverJs, 'dvr-ts-intel'), 'server default dvr-ts-intel');
 
 assert(
   serverJs.includes('builtInProfileIdsToAutoUpdate') &&
   serverJs.includes("'ffmpeg-intel'") &&
   serverJs.includes("'cast-intel'") &&
+  serverJs.includes("'dvr-ts-intel'") &&
   serverJs.includes("'dvr-mp4-intel'"),
   'settings migration should auto-update the built-in Intel QSV profiles for existing installations'
 );
