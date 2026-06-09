@@ -28,7 +28,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ardovini/viniplay
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/viniplay
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag

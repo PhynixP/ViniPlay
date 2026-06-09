@@ -7,7 +7,7 @@ services:
   viniplay:
     # Build from the Dockerfile in the current directory.
     #build: .
-    image: ardovini/viniplay:latest
+    image: gtalpaz/viniplay:latest
 
     
     # Set a consistent name for the container for easy management.

@@ -78,7 +78,7 @@ ViniPlay is designed for easy deployment using Docker.
         version: "3.8"
         services:
           viniplay:
-            image: ardovini/viniplay:latest
+            image: gtalpaz/viniplay:latest
             container_name: viniplay
             ports:
               - "8998:8998"
