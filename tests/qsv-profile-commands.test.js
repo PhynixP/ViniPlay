@@ -24,6 +24,11 @@ function assertModernQsvCommand(command, profileId) {
   );
 
   assert(
+    command.includes('-hwaccel qsv'),
+    `${profileId} should include -hwaccel qsv to initialize the QSV device context needed by hwupload`
+  );
+
+  assert(
     !command.includes('-hwaccel_output_format qsv'),
     `${profileId} should not force QSV hardware decode output — CPU decode + QSV encode is required for all-codec compatibility`
   );
